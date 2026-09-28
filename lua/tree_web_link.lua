@@ -16,7 +16,7 @@
 -- ============================================================
 
 -- IMPORTANT: update WEB_BASE_URL whenever the Quick Tunnel URL changes.
-local WEB_BASE_URL = "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app"
+local WEB_BASE_URL = "https://gtpstreps.vercel.app"
 
 local SHARED_SECRET = "3cb4315652fdb7147aa51506ba5684eba6883679bc6b41b53d8e4cf46abaf274"
 

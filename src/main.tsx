@@ -8,19 +8,10 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
-const isLocalRuntime = typeof window !== "undefined" && LOCAL_HOSTS.has(window.location.hostname);
-
-// Production API fallbacks intentionally avoid the broken gtpstreps.vercel.app
-// alias seen during deployment. The git-main alias is stable across deployments;
-// the current deployment URL is a second fallback until the domain is fixed.
-const API_ORIGINS = isLocalRuntime
-  ? [""]
-  : [
-      "",
-      "https://gtpstreps-git-main-petergts-projects-38342bf6.vercel.app",
-      "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app",
-    ];
+const API_BASE = "";
+const API_FALLBACK_ORIGIN = import.meta.env.PROD
+  ? "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app"
+  : "";
 
 type User = { user_id?: number; growid?: string; clean_name?: string; server?: string; is_admin?: boolean; email?: string; web_account_id?: number };
 type Session = { token: string; user: User };
@@ -84,26 +75,38 @@ function CryptoLogo({symbol,assets}:{symbol:string;assets:AssetConfig}){
 
 async function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (init.body) headers.set("Content-Type", "application/json");
+  const signal = init.signal ?? AbortSignal.timeout(15000);
 
-  let lastError: Error | null = null;
-  for (const origin of API_ORIGINS) {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 12000);
+  const origins = import.meta.env.PROD
+    ? [API_BASE, API_FALLBACK_ORIGIN].filter((value, index, all) => value !== all[index - 1])
+    : [API_BASE];
+
+  let lastError: unknown = null;
+
+  for (const origin of origins) {
     try {
-      const res = await fetch(`${origin}${path}`, { ...init, headers, signal: controller.signal });
+      const res = await fetch(`${origin}${path}`, { ...init, headers, signal });
       const body = await res.json().catch(() => ({}));
+
       if (res.ok) return body;
-      lastError = new Error(body?.message || body?.error || `HTTP ${res.status}`);
-      // A broken project alias can return 404/405. Continue to the known-good API origin.
-      if (![404, 405, 500, 502, 503, 504].includes(res.status)) break;
+
+      // The production alias currently returns 404 for /api/* on some deployments.
+      // Retry the known-good deployment before surfacing the error to the user.
+      if ([404, 405, 500, 502, 503].includes(res.status)) {
+        lastError = new Error(body?.message || body?.error || `HTTP ${res.status}`);
+        continue;
+      }
+
+      throw new Error(body?.message || body?.error || `HTTP ${res.status}`);
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-    } finally {
-      window.clearTimeout(timeout);
+      lastError = error;
+      if (signal.aborted) throw error;
     }
   }
-  throw lastError ?? new Error("API request failed.");
+
+  if (lastError instanceof Error) throw lastError;
+  throw new Error("TREE PS API unavailable.");
 }
 
 function AuthScreen({onAuthenticated}:{onAuthenticated:(session:Session)=>void}){
