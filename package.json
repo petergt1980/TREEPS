@@ -1,11 +1,11 @@
 {
   "name": "tree-ps",
   "private": true,
-  "version": "27.0.0",
+  "version": "29.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:server": "tsx src/server.ts",
+    "dev:server": "tsx src/dev-server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"

@@ -1018,21 +1018,3 @@ app.get("/api/markets/:symbol", async (request: FastifyRequest<{ Params: { symbo
 
 export default app;
 export { app };
-
-if (!process.env.VERCEL && !process.env.VERCEL_URL) {
-  await app.listen({ host: "0.0.0.0", port: PORT });
-  console.log("==========================================");
-  console.log(" TREE PS BACKEND");
-  console.log(` HTTP: http://localhost:${PORT}`);
-  console.log(" Lua secret validation: ENABLED");
-  console.log(" Wallet initial balance: 0");
-  console.log(" Deposit / Withdraw: ENABLED");
-  console.log(" Live market feeds: ENABLED");
-  console.log(" Gacha claim bridge: ENABLED");
-  console.log(" Admin panel: ENABLED");
-  console.log(" Database: Neon PostgreSQL");
-  console.log("==========================================");
-
-  process.on("SIGINT", async () => { try { if (persistTimer) clearTimeout(persistTimer); await persistInFlight; await persistStateNow(); await pool?.end(); } finally { process.exit(0); } });
-  process.on("SIGTERM", async () => { try { if (persistTimer) clearTimeout(persistTimer); await persistInFlight; await persistStateNow(); await pool?.end(); } finally { process.exit(0); } });
-}

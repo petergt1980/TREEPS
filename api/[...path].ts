@@ -1,16 +1,16 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
-function headersFrom(req: IncomingMessage): Record<string, string> {
-  const headers: Record<string, string> = {};
+function toHeaders(req: IncomingMessage): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
-    if (typeof value === "string") headers[key] = value;
-    else if (Array.isArray(value)) headers[key] = value.join(", ");
+    if (typeof value === 'string') out[key] = value;
+    else if (Array.isArray(value)) out[key] = value.join(', ');
   }
-  return headers;
+  return out;
 }
 
 async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
-  if (req.method === "GET" || req.method === "HEAD") return undefined;
+  if (req.method === 'GET' || req.method === 'HEAD') return undefined;
   const chunks: Buffer[] = [];
   for await (const chunk of req as any) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -18,21 +18,23 @@ async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
   return chunks.length ? Buffer.concat(chunks) : undefined;
 }
 
+function normalizePath(req: IncomingMessage): string {
+  const raw = req.url || '/api';
+  const url = new URL(raw, 'https://tree-ps.local');
+  return url.pathname + (url.search || '');
+}
+
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    // Lazy-load the Fastify app inside the invocation so module/startup failures
-    // become a readable JSON response instead of a generic Vercel 500.
-    const mod = await import("../src/server");
-    const app = mod.default;
-    const method = (req.method || "GET").toUpperCase();
-    const url = req.url || "/api";
+    const { app } = await import('../src/server');
     const body = await readBody(req);
+    const method = (req.method || 'GET').toUpperCase();
+    const url = normalizePath(req);
 
-    await app.ready();
     const result = await app.inject({
       method: method as any,
       url,
-      headers: headersFrom(req),
+      headers: toHeaders(req),
       ...(body !== undefined ? { payload: body } : {})
     });
 
@@ -43,11 +45,15 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     res.end(result.rawPayload);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("TREE PS Vercel API invocation failed:", error);
+    console.error('[TREE PS] API function error:', error);
     if (!res.headersSent) {
       res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ success: false, code: "FUNCTION_INIT_FAILED", message }));
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.end(JSON.stringify({
+        success: false,
+        code: 'TREE_PS_API_RUNTIME_ERROR',
+        message
+      }));
     }
   }
 }
