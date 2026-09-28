@@ -8,12 +8,12 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const API_BASE = import.meta.env.PROD
+const API_ORIGIN = import.meta.env.PROD
   ? "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app"
-  : "";
-const API_FALLBACK_ORIGIN = "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app";
+  : "http://localhost:3000";
 
-console.info("[TREE-PS V34] API BASE:", import.meta.env.PROD ? API_BASE : "http://localhost:3000");
+console.info("[TREE-PS V35] API ORIGIN:", API_ORIGIN);
+(window as any).__TREE_PS_BUILD__ = "V35";
 
 type User = { user_id?: number; growid?: string; clean_name?: string; server?: string; is_admin?: boolean; email?: string; web_account_id?: number };
 type Session = { token: string; user: User };
@@ -80,35 +80,13 @@ async function api(path: string, init: RequestInit = {}) {
   if (init.body) headers.set("Content-Type", "application/json");
   const signal = init.signal ?? AbortSignal.timeout(15000);
 
-  const origins = import.meta.env.PROD
-    ? [API_BASE, API_FALLBACK_ORIGIN].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i)
-    : [API_BASE];
+  const res = await fetch(`${API_ORIGIN}${path}`, { ...init, headers, signal });
+  const text = await res.text();
+  let body: any = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { message: text }; }
 
-  let lastError: unknown = null;
-
-  for (const origin of origins) {
-    try {
-      const res = await fetch(`${origin}${path}`, { ...init, headers, signal });
-      const body = await res.json().catch(() => ({}));
-
-      if (res.ok) return body;
-
-      // The production alias currently returns 404 for /api/* on some deployments.
-      // Retry the known-good deployment before surfacing the error to the user.
-      if ([404, 405, 500, 502, 503].includes(res.status)) {
-        lastError = new Error(body?.message || body?.error || `HTTP ${res.status}`);
-        continue;
-      }
-
-      throw new Error(body?.message || body?.error || `HTTP ${res.status}`);
-    } catch (error) {
-      lastError = error;
-      if (signal.aborted) throw error;
-    }
-  }
-
-  if (lastError instanceof Error) throw lastError;
-  throw new Error("TREE PS API unavailable.");
+  if (res.ok) return body;
+  throw new Error(body?.message || body?.error || `HTTP ${res.status}`);
 }
 
 function AuthScreen({onAuthenticated}:{onAuthenticated:(session:Session)=>void}){
