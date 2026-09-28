@@ -1,40 +1,39 @@
-import app from "../src/server";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-type VercelRequest = IncomingMessage & {
-  body?: unknown;
-};
+function headersFrom(req: IncomingMessage): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (typeof value === "string") headers[key] = value;
+    else if (Array.isArray(value)) headers[key] = value.join(", ");
+  }
+  return headers;
+}
 
-type VercelResponse = ServerResponse & {
-  status: (code: number) => VercelResponse;
-  json: (body: unknown) => VercelResponse;
-  send: (body: unknown) => VercelResponse;
-};
+async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
+  if (req.method === "GET" || req.method === "HEAD") return undefined;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req as any) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return chunks.length ? Buffer.concat(chunks) : undefined;
+}
 
-export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
+    // Lazy-load the Fastify app inside the invocation so module/startup failures
+    // become a readable JSON response instead of a generic Vercel 500.
+    const mod = await import("../src/server");
+    const app = mod.default;
+    const method = (req.method || "GET").toUpperCase();
+    const url = req.url || "/api";
+    const body = await readBody(req);
+
     await app.ready();
-
-    const headers: Record<string, string> = {};
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (typeof value === "string") headers[key] = value;
-      else if (Array.isArray(value)) headers[key] = value.join(", ");
-    }
-
-    let payload: string | Buffer | undefined;
-    if (req.body !== undefined && req.body !== null) {
-      payload = typeof req.body === "string"
-        ? req.body
-        : Buffer.isBuffer(req.body)
-          ? req.body
-          : JSON.stringify(req.body);
-    }
-
     const result = await app.inject({
-      method: (req.method || "GET") as any,
-      url: req.url || "/",
-      headers,
-      ...(payload !== undefined ? { payload } : {})
+      method: method as any,
+      url,
+      headers: headersFrom(req),
+      ...(body !== undefined ? { payload: body } : {})
     });
 
     res.statusCode = result.statusCode;
@@ -43,11 +42,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
     res.end(result.rawPayload);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "TREE PS API error";
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("TREE PS Vercel API invocation failed:", error);
     if (!res.headersSent) {
       res.statusCode = 500;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ success: false, message }));
+      res.end(JSON.stringify({ success: false, code: "FUNCTION_INIT_FAILED", message }));
     }
   }
 }

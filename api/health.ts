@@ -6,7 +6,8 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
   res.end(JSON.stringify({
     ok: true,
     service: "tree-ps",
+    runtime: "vercel-node",
     api: true,
-    message: "TREE PS API is deployed."
+    time: new Date().toISOString()
   }));
 }

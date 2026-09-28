@@ -5,7 +5,7 @@ import "dotenv/config";
 import { Pool } from "pg";
 
 const app = Fastify({ logger: true, bodyLimit: 256 * 1024 });
-await app.register(cors, { origin: true });
+app.register(cors, { origin: true });
 
 app.addHook("onResponse", async (request, reply) => {
   if (["POST","PUT","PATCH","DELETE"].includes(request.method) && reply.statusCode < 400) {
@@ -1019,7 +1019,7 @@ app.get("/api/markets/:symbol", async (request: FastifyRequest<{ Params: { symbo
 export default app;
 export { app };
 
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && !process.env.VERCEL_URL) {
   await app.listen({ host: "0.0.0.0", port: PORT });
   console.log("==========================================");
   console.log(" TREE PS BACKEND");

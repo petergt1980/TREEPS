@@ -4,9 +4,11 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify({
-    ok: true,
-    service: "tree-ps",
-    api: true,
-    message: "TREE PS API is deployed."
+    success: true,
+    version: "TREE-AUTH-V27",
+    register: true,
+    login: true,
+    link: true,
+    runtime: "vercel"
   }));
 }
