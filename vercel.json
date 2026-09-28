@@ -2,15 +2,5 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app/api/:path*"
-    },
-    {
-      "source": "/health",
-      "destination": "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app/health"
-    }
-  ]
+  "outputDirectory": "dist"
 }

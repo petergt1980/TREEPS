@@ -9,10 +9,8 @@ import {
 import "./styles.css";
 
 const API_ORIGIN = import.meta.env.DEV ? "http://localhost:3000" : "";
-console.info("[TREE-PS V36] API ORIGIN:", API_ORIGIN || "same-origin /api");
-
-console.info("[TREE-PS V35] API ORIGIN:", API_ORIGIN);
-(window as any).__TREE_PS_BUILD__ = "V35";
+console.info("[TREE-PS V37] API ORIGIN:", API_ORIGIN || "same-origin /api");
+(window as any).__TREE_PS_BUILD__ = "V37";
 
 type User = { user_id?: number; growid?: string; clean_name?: string; server?: string; is_admin?: boolean; email?: string; web_account_id?: number };
 type Session = { token: string; user: User };
