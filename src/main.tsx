@@ -8,6 +8,13 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
+const API_BASE = import.meta.env.PROD
+  ? "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app"
+  : "";
+const API_FALLBACK_ORIGIN = "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app";
+
+console.info("[TREE-PS V34] API BASE:", import.meta.env.PROD ? API_BASE : "http://localhost:3000");
+
 type User = { user_id?: number; growid?: string; clean_name?: string; server?: string; is_admin?: boolean; email?: string; web_account_id?: number };
 type Session = { token: string; user: User };
 type WalletBalance = { wl:number; dl:number; bgl:number; ggl:number; gems:number };
@@ -71,34 +78,37 @@ function CryptoLogo({symbol,assets}:{symbol:string;assets:AssetConfig}){
 async function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   if (init.body) headers.set("Content-Type", "application/json");
-  const controller = new AbortController();
-  const externalSignal = init.signal;
-  const timeout = window.setTimeout(() => controller.abort(), 15000);
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
-  }
+  const signal = init.signal ?? AbortSignal.timeout(15000);
 
-  const requestInit: RequestInit = { ...init, headers, signal: controller.signal };
+  const origins = import.meta.env.PROD
+    ? [API_BASE, API_FALLBACK_ORIGIN].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i)
+    : [API_BASE];
 
-  try {
-    // Production uses one same-origin Vercel Function gateway. This avoids
-    // cross-project aliases and deployment-specific URLs entirely.
-    const target = import.meta.env.PROD
-      ? `/api/index?path=${encodeURIComponent(path)}`
-      : path;
+  let lastError: unknown = null;
 
-    const res = await fetch(target, requestInit);
-    const body = await res.json().catch(() => ({}));
+  for (const origin of origins) {
+    try {
+      const res = await fetch(`${origin}${path}`, { ...init, headers, signal });
+      const body = await res.json().catch(() => ({}));
 
-    if (!res.ok) {
+      if (res.ok) return body;
+
+      // The production alias currently returns 404 for /api/* on some deployments.
+      // Retry the known-good deployment before surfacing the error to the user.
+      if ([404, 405, 500, 502, 503].includes(res.status)) {
+        lastError = new Error(body?.message || body?.error || `HTTP ${res.status}`);
+        continue;
+      }
+
       throw new Error(body?.message || body?.error || `HTTP ${res.status}`);
+    } catch (error) {
+      lastError = error;
+      if (signal.aborted) throw error;
     }
-
-    return body;
-  } finally {
-    window.clearTimeout(timeout);
   }
+
+  if (lastError instanceof Error) throw lastError;
+  throw new Error("TREE PS API unavailable.");
 }
 
 function AuthScreen({onAuthenticated}:{onAuthenticated:(session:Session)=>void}){
