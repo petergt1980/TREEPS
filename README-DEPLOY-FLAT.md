@@ -1,41 +1,64 @@
-# TREE-PS — Single-Project Vercel Layout
+# TREE PS V25 — Single Vercel Project
 
-This version intentionally has **no `backend/` or `frontend/` directories**.
+Flat single-project layout. There is **no `backend/` or `frontend/` folder**.
 
-## Layout
 ```text
 TREE-PS/
 ├── api/
 │   └── [...path].ts
 ├── src/
 │   ├── main.tsx
-│   ├── styles.css
-│   └── server.ts
+│   ├── server.ts
+│   └── styles.css
 ├── lua/
+├── sql/
 ├── index.html
 ├── package.json
-├── tsconfig.json
 ├── vite.config.ts
 └── vercel.json
 ```
 
 ## Vercel
-Import this repository as a normal Vite project. Do not use Services.
 
-Environment Variables:
-- `DATABASE_URL` = Neon PostgreSQL connection string
-- `TREE_PS_SHARED_SECRET` = same secret used by the Lua link script
-- `TREE_PS_ADMIN_EMAILS` = comma-separated admin emails
-- `NODE_ENV` = `production`
+Import the repository as **one Vercel project**.
 
-The frontend calls `/api/...` on the same domain. The catch-all Vercel Function in `api/[...path].ts` forwards those requests to the Fastify app.
+- Root Directory: repository root (`.`)
+- Framework: Vite
+- Build Command: `npm run build`
+- Output Directory: `dist`
 
-## Local
+The API is provided by the Vercel Function at `api/[...path].ts`; it forwards requests into the Fastify app using `app.inject()`. No second backend project is required.
+
+## Environment Variables
+
+Set these in the **same Vercel project**:
+
+- `DATABASE_URL` — Neon PostgreSQL connection string
+- `TREE_PS_SHARED_SECRET` — permanent secret used by the Lua bridge
+- `TREE_PS_ADMIN_EMAILS` — comma-separated bootstrap admin emails
+- `NODE_ENV` — `production`
+
+Do not commit `.env`.
+
+## Lua
+
+`lua/tree_web_link.lua` is configured to call the current TREE-PS Vercel domain:
+
+```lua
+local WEB_BASE_URL = "https://gtpstreps.vercel.app"
+```
+
+Change only that value if the Vercel production domain changes. `SHARED_SECRET` must match the Vercel environment variable exactly.
+
+## Local development
+
 ```bash
 npm install
 npm run dev
 ```
-In a second terminal, if you want the API separately while developing:
+
+In a second terminal:
+
 ```bash
 npm run dev:server
 ```

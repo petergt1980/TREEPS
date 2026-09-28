@@ -8,7 +8,15 @@ const app = Fastify({ logger: true, bodyLimit: 256 * 1024 });
 await app.register(cors, { origin: true });
 
 app.addHook("onResponse", async (request, reply) => {
-  if (["POST","PUT","PATCH","DELETE"].includes(request.method) && reply.statusCode < 400) schedulePersist();
+  if (["POST","PUT","PATCH","DELETE"].includes(request.method) && reply.statusCode < 400) {
+    // Vercel Functions may freeze immediately after the response.
+    // Persist synchronously so auth/link/game/trading mutations are not lost.
+    try {
+      await persistStateNow();
+    } catch (error) {
+      console.error("TREE PS Neon persist failed", error);
+    }
+  }
 });
 
 app.addHook("onRequest", async (request, reply) => {
@@ -438,9 +446,8 @@ function publicAccounts() {
 }
 function publicGameConfigs() { return Object.values(configStore.games).map(g=>({ id:g.id, enabled:g.enabled, title:g.title, description:g.description, badge:g.badge, stakes:g.stakes, maxStake:g.maxStake })); }
 
-await ensureDatabase();
-dbReady = true;
-await persistStateNow();
+// Database initialization is lazy on first API request. This prevents a bad/missing
+// DATABASE_URL from crashing the entire Vercel function before /health can respond.
 autoCleanup();
 
 app.get("/health", async () => ({ ok: true, service: "tree-ps-backend", version: "TREE-DB-V13", time: new Date().toISOString() }));
