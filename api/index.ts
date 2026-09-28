@@ -12,36 +12,28 @@ function headersFrom(req: IncomingMessage): Record<string, string> {
 async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
   if (req.method === "GET" || req.method === "HEAD") return undefined;
   const chunks: Buffer[] = [];
-  for await (const chunk of req as any) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
+  for await (const chunk of req as any) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   return chunks.length ? Buffer.concat(chunks) : undefined;
 }
 
-function routedPath(req: IncomingMessage): string {
-  const raw = req.url || "/api";
-  try {
-    const url = new URL(raw, "https://tree-ps.local");
-    const path = url.searchParams.get("path");
-    if (path) return path.startsWith("/") ? path : `/${path}`;
-    return url.pathname;
-  } catch {
-    return raw.split("?")[0] || "/api";
-  }
+function targetPath(req: IncomingMessage): string {
+  const raw = req.url || "/api/index";
+  const u = new URL(raw, "https://tree-ps.local");
+  const target = u.searchParams.get("path");
+  if (target) return target.startsWith("/") ? target : `/${target}`;
+  return "/api/auth/version";
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const mod = await import("../src/server");
-    const app = mod.default;
-    const body = await readBody(req);
-    const method = (req.method || "GET").toUpperCase();
-    const path = routedPath(req);
-
+    const app = mod.app ?? mod.default;
     await app.ready();
+
+    const body = await readBody(req);
     const result = await app.inject({
-      method: method as any,
-      url: path,
+      method: (req.method || "GET") as any,
+      url: targetPath(req),
       headers: headersFrom(req),
       ...(body !== undefined ? { payload: body } : {})
     });
@@ -53,15 +45,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     res.end(result.rawPayload);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("TREE PS API invocation failed:", error);
-    if (!res.headersSent) {
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({
-        success: false,
-        code: "FUNCTION_INIT_FAILED",
-        message
-      }));
-    }
+    console.error("[TREE-PS] gateway error", error);
+    res.statusCode = 500;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ success: false, code: "TREE_PS_GATEWAY_ERROR", message }));
   }
 }
