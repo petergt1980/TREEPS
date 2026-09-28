@@ -1,0 +1,35 @@
+api/[...path].ts(2,54): error TS2307: Cannot find module 'node:http' or its corresponding type declarations.
+src/main.tsx(1,53): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/main.tsx(2,28): error TS2307: Cannot find module 'react-dom/client' or its corresponding type declarations.
+src/main.tsx(8,8): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/main.tsx(31,88): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/main.tsx(280,510): error TS2322: Type '{ key: any; label: any; icon: any; active: any; setActive: (x: string) => void; }' is not assignable to type '{ label: string; icon: React.ReactNode; active: string; setActive: (s: string) => void; }'.
+  Property 'key' does not exist on type '{ label: string; icon: React.ReactNode; active: string; setActive: (s: string) => void; }'.
+src/main.tsx(280,691): error TS2322: Type '{ key: any; label: any; icon: any; active: any; setActive: (x: string) => void; }' is not assignable to type '{ label: string; icon: React.ReactNode; active: string; setActive: (s: string) => void; }'.
+  Property 'key' does not exist on type '{ label: string; icon: React.ReactNode; active: string; setActive: (s: string) => void; }'.
+src/main.tsx(280,876): error TS2322: Type '{ key: any; label: any; icon: any; active: any; setActive: (x: string) => void; }' is not assignable to type '{ label: string; icon: React.ReactNode; active: string; setActive: (s: string) => void; }'.
+  Property 'key' does not exist on type '{ label: string; icon: React.ReactNode; active: string; setActive: (s: string) => void; }'.
+src/main.tsx(280,1069): error TS2322: Type '{ key: any; label: any; icon: any; active: any; setActive: (x: string) => void; }' is not assignable to type '{ label: string; icon: React.ReactNode; active: string; setActive: (s: string) => void; }'.
+  Property 'key' does not exist on type '{ label: string; icon: React.ReactNode; active: string; setActive: (s: string) => void; }'.
+src/main.tsx(600,17): error TS2339: Property 'props' does not exist on type 'AppErrorBoundary'.
+src/server.ts(1,41): error TS2307: Cannot find module 'fastify' or its corresponding type declarations.
+src/server.ts(2,18): error TS2307: Cannot find module '@fastify/cors' or its corresponding type declarations.
+src/server.ts(3,20): error TS2307: Cannot find module 'node:crypto' or its corresponding type declarations.
+src/server.ts(5,22): error TS2307: Cannot find module 'pg' or its corresponding type declarations.
+src/server.ts(26,21): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(27,32): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(52,23): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(55,46): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(133,19): error TS2503: Cannot find namespace 'NodeJS'.
+src/server.ts(240,28): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(241,27): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(242,32): error TS2307: Cannot find module 'node:fs' or its corresponding type declarations.
+src/server.ts(342,14): error TS2580: Cannot find name 'Buffer'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(342,35): error TS2580: Cannot find name 'Buffer'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(396,39): error TS2339: Property 'unref' does not exist on type 'number'.
+src/server.ts(406,17): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(1015,6): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(1029,3): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(1029,169): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(1030,3): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
+src/server.ts(1030,170): error TS2580: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
