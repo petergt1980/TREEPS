@@ -8,10 +8,10 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const API_BASE = "";
-const API_FALLBACK_ORIGIN = import.meta.env.PROD
+const API_BASE = import.meta.env.PROD
   ? "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app"
   : "";
+const API_FALLBACK_ORIGIN = "";
 
 type User = { user_id?: number; growid?: string; clean_name?: string; server?: string; is_admin?: boolean; email?: string; web_account_id?: number };
 type Session = { token: string; user: User };
@@ -79,7 +79,7 @@ async function api(path: string, init: RequestInit = {}) {
   const signal = init.signal ?? AbortSignal.timeout(15000);
 
   const origins = import.meta.env.PROD
-    ? [API_BASE, API_FALLBACK_ORIGIN].filter((value, index, all) => value !== all[index - 1])
+    ? [API_BASE]
     : [API_BASE];
 
   let lastError: unknown = null;
