@@ -8,6 +8,7 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
     service: "tree-ps",
     runtime: "vercel-node",
     api: true,
+    version: "TREE-API-V28",
     time: new Date().toISOString()
   }));
 }
