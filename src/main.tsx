@@ -8,9 +8,8 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const API_ORIGIN = import.meta.env.PROD
-  ? "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app"
-  : "http://localhost:3000";
+const API_ORIGIN = import.meta.env.DEV ? "http://localhost:3000" : "";
+console.info("[TREE-PS V36] API ORIGIN:", API_ORIGIN || "same-origin /api");
 
 console.info("[TREE-PS V35] API ORIGIN:", API_ORIGIN);
 (window as any).__TREE_PS_BUILD__ = "V35";

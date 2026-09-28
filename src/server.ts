@@ -5,7 +5,23 @@ import "dotenv/config";
 import { Pool } from "pg";
 
 const app = Fastify({ logger: true, bodyLimit: 256 * 1024 });
-app.register(cors, { origin: true });
+const ALLOWED_ORIGINS = new Set([
+  "https://gtpstreps.vercel.app",
+  "https://gtpstreeps.vercel.app",
+]);
+
+app.register(cors, {
+  origin: (origin, cb) => {
+    if (!origin || ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+    return cb(null, false);
+  },
+  methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Accept", "X-TREE-PS-SECRET", "X-API-Key"],
+  maxAge: 86400,
+});
+
+
+app.options("/api/*", async (_request, reply) => reply.code(204).send());
 
 app.addHook("onResponse", async (request, reply) => {
   if (["POST","PUT","PATCH","DELETE"].includes(request.method) && reply.statusCode < 400) {
