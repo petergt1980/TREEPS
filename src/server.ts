@@ -76,7 +76,7 @@ type PersistedConfig = { site: SiteConfig; games: Record<string, GameConfig>; as
 const DATABASE_URL = (process.env.DATABASE_URL ?? "").trim();
 const pool = DATABASE_URL ? new Pool({
   connectionString: DATABASE_URL,
-  ssl: DATABASE_URL.includes("neon.tech") || process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
+  ssl: DATABASE_URL.includes("neon.tech") || DATABASE_URL.includes("sslmode=require") || process.env.VERCEL === "1" || process.env.NETLIFY === "true" ? { rejectUnauthorized: false } : undefined,
   max: 10,
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
