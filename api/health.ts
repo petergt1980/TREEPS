@@ -7,7 +7,7 @@ export default function handler(_req: IncomingMessage, res: ServerResponse): voi
     ok: true,
     service: 'tree-ps',
     runtime: 'vercel-node',
-    version: 'TREE-API-V37',
+    version: 'TREE-API-V39',
     api: true,
     time: new Date().toISOString()
   }));
