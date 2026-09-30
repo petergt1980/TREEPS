@@ -428,15 +428,21 @@ function amountValue(v: unknown): number {
 }
 function envList(name: string): string[] {
   return String(process.env[name] || "")
-    .split(",")
+    .split(/[\s,;\n]+/)
     .map(v => v.trim().replace(/^['\"]|['\"]$/g, "").toLowerCase())
     .filter(Boolean);
 }
+function adminEmailList(): string[] {
+  return [...new Set([
+    ...envList("TREE_PS_ADMIN_EMAILS"),
+    ...envList("TREE_PS_ADMIN_EMAIL"),
+    ...envList("ADMIN_EMAILS"),
+    ...envList("ADMIN_EMAIL")
+  ].map(normalizeEmail).filter(Boolean))];
+}
 function isAdminEmail(email:string|undefined){
   const normalized = normalizeEmail(email);
-  if (!normalized) return false;
-  const configured = [...envList("TREE_PS_ADMIN_EMAILS"), ...envList("TREE_PS_ADMIN_EMAIL")];
-  return configured.includes(normalized);
+  return !!normalized && adminEmailList().includes(normalized);
 }
 function isAdminUser(user: User): boolean {
   const ids = envList("TREE_PS_ADMIN_USER_IDS");
@@ -466,7 +472,7 @@ function publicGameConfigs() { return Object.values(configStore.games).map(g=>({
 // DATABASE_URL from crashing the entire Vercel function before /health can respond.
 autoCleanup();
 
-app.get("/health", async () => ({ ok: true, service: "tree-ps-backend", version: "TREE-DB-V13", time: new Date().toISOString() }));
+app.get("/health", async () => ({ ok: true, service: "tree-ps-backend", version: "TREE-API-V41", time: new Date().toISOString() }));
 app.get("/api/system/database", async () => ({ success:true, provider:"Neon PostgreSQL", persistent:true, browserStorage:"session_token_only", message:"Persistent application data is stored in Neon; localStorage only caches the current session token." }));
 
 
@@ -506,7 +512,7 @@ app.post("/api/auth/register/", async (request, reply) => {
   return {success:true,session:token,user,is_admin:isAdminUser(user),requiresGrowIDLink:true};
 });
 
-app.get("/api/auth/version", async () => ({success:true,version:"TREE-AUTH-V10",register:true,login:true,link:true}));
+app.get("/api/auth/version", async () => ({success:true,version:"TREE-AUTH-V41",register:true,login:true,link:true}));
 
 app.post("/api/auth/login", async (request, reply) => {
   const body = parseJsonBody(request.body);
@@ -524,13 +530,24 @@ app.get("/api/auth/admin-status", async (request, reply) => {
   const s = authSession(request);
   if (!s) return reply.code(401).send({ authenticated:false, is_admin:false });
   const email = normalizeEmail(s.user.email);
-  const envEmails = [...envList("TREE_PS_ADMIN_EMAILS"), ...envList("TREE_PS_ADMIN_EMAIL")];
+  const envEmails = adminEmailList();
   const envEmailMatch = !!email && envEmails.includes(email);
   const account = s.user.web_account_id ? [...webAccounts.values()].find(a => a.id === s.user.web_account_id) : (email ? webAccounts.get(email) : undefined);
   const accountFlag = !!account?.is_admin;
   const growidMatch = envList("TREE_PS_ADMIN_GROWIDS").includes(normalizeEmail(s.user.growid)) || envList("TREE_PS_ADMIN_GROWIDS").includes(normalizeEmail(s.user.clean_name));
   const userIdMatch = envList("TREE_PS_ADMIN_USER_IDS").includes(String(s.user.user_id));
   return { authenticated:true, is_admin: envEmailMatch || accountFlag || growidMatch || userIdMatch, email, envEmailMatch, accountFlag, growidMatch, userIdMatch };
+});
+
+app.get("/api/auth/admin-config", async (request, reply) => {
+  if (!authSession(request)) return reply.code(401).send({ authenticated:false });
+  return {
+    authenticated:true,
+    runtimeConfigured: adminEmailList().length > 0 || envList("TREE_PS_ADMIN_GROWIDS").length > 0 || envList("TREE_PS_ADMIN_USER_IDS").length > 0,
+    emailConfigured: adminEmailList().length > 0,
+    growidConfigured: envList("TREE_PS_ADMIN_GROWIDS").length > 0,
+    userIdConfigured: envList("TREE_PS_ADMIN_USER_IDS").length > 0
+  };
 });
 
 app.get("/api/auth/account", async (request, reply) => {
@@ -573,7 +590,7 @@ const verifyLinkHandler = async (request: FastifyRequest<{ Body: any }>, reply: 
   sessions.set(session, { user, expiresAt: Date.now() + SESSION_TTL_MS });
   getWallet(userId); // creates zero wallet only; never seeds a balance
 
-  return { success: true, message: "GrowID linked successfully.", session, user, version: "TREE-DB-V13" };
+  return { success: true, message: "GrowID linked successfully.", session, user, version: "TREE-API-V41" };
 };
 
 app.post("/api/auth/verify-link", verifyLinkHandler);
@@ -607,42 +624,26 @@ app.get("/api/player/wallet", async (request, reply) => {
 });
 app.get("/api/player/game-wallet", async (request, reply) => {
   const s = authSession(request); if (!s) return reply.code(401).send({ message: "Unauthorized" });
-  return { success: true, game_wallet: getGameWallet(s.user.user_id) };
+  return { success: true, game_wallet: { locks: 0, lastBonusAt: 0, mode: "free-play" } };
 });
 
 app.post("/api/game/bonus", async (request, reply) => {
   const s = authSession(request); if (!s) return reply.code(401).send({ message: "Unauthorized" });
-  const w = getGameWallet(s.user.user_id);
-  const now = Date.now();
-  const cooldown = Math.max(1, Number(configStore.site.gameBonusCooldownHours || 24)) * 60 * 60 * 1000;
-  if (now - w.lastBonusAt < cooldown) return reply.code(429).send({ success: false, message: "Daily game-lock bonus is not ready yet.", game_wallet: w, nextAt: w.lastBonusAt + cooldown });
-  const amount = Math.max(0, Math.floor(Number(configStore.site.dailyGameLocks || 0)));
-  w.locks += amount; w.lastBonusAt = now;
-  return { success: true, amount, game_wallet: w };
+  return { success: true, amount: 0, game_wallet: { locks: 0, lastBonusAt: 0, mode: "free-play" }, message: "Game Hub uses free-play mode; no Game Locks are used." };
 });
 
 app.post("/api/games/play", async (request, reply) => {
   const s = authSession(request); if (!s) return reply.code(401).send({ message: "Unauthorized" });
   const body = request.body as any;
   const gameId = normalize(body?.game_id);
-  const stake = amountValue(body?.stake);
   const cfg = configStore.games[gameId];
-  if (!cfg || !cfg.enabled || stake <= 0 || !cfg.stakes.includes(stake) || stake > Math.min(cfg.maxStake, configStore.site.gameMaxStake)) return reply.code(400).send({ success: false, message: "Game is disabled or entry is invalid." });
-  const w = getGameWallet(s.user.user_id);
-  if (w.locks < stake) return reply.code(400).send({ success: false, message: "Not enough Game Locks." });
-  w.locks -= stake;
+  if (!cfg || !cfg.enabled) return reply.code(400).send({ success: false, message: "Game is disabled." });
   const roundId = crypto.randomUUID();
-  gameRounds.set(roundId, { userId: s.user.user_id, gameId, stake, createdAt: Date.now() });
   const out = gameOutcome(gameId);
-  const adjustedMultiplier = Math.max(0, out.multiplier) * Math.max(0, Number(cfg.payoutScale || 1));
-  const payout = Math.floor(stake * adjustedMultiplier);
-  const net = payout - stake;
-  w.locks += payout;
-  gameRounds.delete(roundId);
   const history = gameHistory.get(s.user.user_id) ?? [];
-  history.unshift({ id: roundId, gameId, stake, outcome: out.outcome, multiplier: adjustedMultiplier, payout, net, at: Date.now() });
+  history.unshift({ id: roundId, gameId, stake: 0, outcome: out.outcome, multiplier: 0, payout: 0, net: 0, at: Date.now() });
   gameHistory.set(s.user.user_id, history.slice(0, 50));
-  return { success: true, round_id: roundId, game_id: gameId, stake, outcome: out.outcome, multiplier: adjustedMultiplier, payout, net, game_wallet: w };
+  return { success: true, round_id: roundId, game_id: gameId, outcome: out.outcome, score: Math.max(0, Math.round(out.multiplier * 100)), game_wallet: { locks: 0, lastBonusAt: 0, mode: "free-play" } };
 });
 
 app.get("/api/player/game-history", async (request, reply) => {
@@ -659,37 +660,55 @@ app.get("/api/player/history", async (request, reply) => {
   return { success: true, items: [] };
 });
 
+const CURRENCY_UNITS: Record<keyof Wallet, number> = { wl:1, dl:100, bgl:10000, ggl:1000000, gems:1 };
+function currencyBalanceInBase(w:Wallet, currency:keyof Wallet){ return (Number(w[currency])||0) * CURRENCY_UNITS[currency]; }
+function deductCurrency(w:Wallet, currency:keyof Wallet, baseUnits:number){
+  const units = CURRENCY_UNITS[currency];
+  const need = Math.ceil(Math.max(0,baseUnits) / units);
+  if ((w[currency]||0) < need) return null;
+  w[currency] = Math.max(0,(w[currency]||0)-need);
+  return need;
+}
+function creditCurrency(w:Wallet, currency:keyof Wallet, baseUnits:number){
+  const units=CURRENCY_UNITS[currency];
+  const add=Math.floor(Math.max(0,baseUnits)/units);
+  w[currency]=(w[currency]||0)+add;
+  return add;
+}
+
 app.get("/api/trading/config", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
-  return {success:true, trading:{enabled:configStore.trading.enabled,feeBps:configStore.trading.feeBps,minLocks:configStore.trading.minLocks,maxLocks:configStore.trading.maxLocks,assets:Object.values(configStore.trading.assets).filter(a=>a.enabled)}};
+  return {success:true, trading:{enabled:configStore.trading.enabled,feeBps:configStore.trading.feeBps,assets:Object.values(configStore.trading.assets).filter(a=>a.enabled),currencies:["wl","dl","bgl","ggl"]}};
 });
 app.get("/api/trading/portfolio", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
-  return {success:true, game_wallet:getGameWallet(s.user.user_id), holdings:getTradingPortfolio(s.user.user_id), history:getTradingHistory(s.user.user_id).slice(-50).reverse()};
+  return {success:true,wallet:getWallet(s.user.user_id),holdings:getTradingPortfolio(s.user.user_id),history:getTradingHistory(s.user.user_id).slice(-50).reverse()};
 });
 app.post("/api/trading/order", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
-  if(!configStore.trading.enabled) return reply.code(503).send({success:false,message:"Lock Trading is disabled."});
+  if(!configStore.trading.enabled) return reply.code(503).send({success:false,message:"Trading is disabled."});
   const body=parseJsonBody(request.body);
   const symbol=normalize(body?.symbol).toUpperCase(); const side=normalize(body?.side).toUpperCase();
+  const currency=validCurrency(body?.currency) && body?.currency !== "gems" ? String(body.currency).toLowerCase() as keyof Wallet : "wl";
   const asset=configStore.trading.assets[symbol]; const amount=safeTradeAmount(body?.amount);
   if(!asset || !asset.enabled || !["BUY","SELL"].includes(side)) return reply.code(400).send({success:false,message:"Invalid trading order."});
   if(amount < asset.minOrder || amount > asset.maxOrder) return reply.code(400).send({success:false,message:`Order amount must be between ${asset.minOrder} and ${asset.maxOrder} ${symbol}.`});
-  const gross=Math.max(1,Math.round(amount*asset.priceLocks));
-  if(gross < configStore.trading.minLocks || gross > configStore.trading.maxLocks) return reply.code(400).send({success:false,message:"Order size is outside the configured Lock limits."});
-  const fee=Math.floor(gross*Math.max(0,Number(configStore.trading.feeBps||0))/10000);
-  const w=getGameWallet(s.user.user_id); const p=getTradingPortfolio(s.user.user_id);
-  p[symbol]=Number(p[symbol]||0);
-  if(side==="BUY"){
-    const total=gross+fee; if(w.locks<total) return reply.code(400).send({success:false,message:`Not enough Game Locks. Need ${total}.`,game_wallet:w});
-    w.locks-=total; p[symbol]=Math.round((p[symbol]+amount)*1_000_000)/1_000_000;
-  }else{
+  const grossWl=Math.max(1,Math.round(amount*asset.priceLocks));
+  const feeWl=Math.floor(grossWl*Math.max(0,Number(configStore.trading.feeBps||0))/10000);
+  const w=getWallet(s.user.user_id); const p=getTradingPortfolio(s.user.user_id); p[symbol]=Number(p[symbol]||0);
+  if(side==="BUY") {
+    const required=grossWl+feeWl;
+    const debited=deductCurrency(w,currency,required);
+    if(debited===null) return reply.code(400).send({success:false,message:`Not enough ${currency.toUpperCase()} balance.`,wallet:w});
+    p[symbol]=Math.round((p[symbol]+amount)*1_000_000)/1_000_000;
+  } else {
     if(p[symbol] < amount) return reply.code(400).send({success:false,message:`Insufficient ${symbol} holdings.`});
-    p[symbol]=Math.round((p[symbol]-amount)*1_000_000)/1_000_000; w.locks+=Math.max(0,gross-fee);
+    p[symbol]=Math.round((p[symbol]-amount)*1_000_000)/1_000_000;
+    creditCurrency(w,currency,Math.max(0,grossWl-feeWl));
   }
-  const item={id:crypto.randomUUID(),symbol,side:side as "BUY"|"SELL",amount,priceLocks:asset.priceLocks,grossLocks:gross,feeLocks:fee,netLocks:side==="BUY"?-(gross+fee):(gross-fee),at:Date.now()};
+  const item={id:crypto.randomUUID(),symbol,side:side as "BUY"|"SELL",amount,priceLocks:asset.priceLocks,currency,grossLocks:grossWl,feeLocks:feeWl,netLocks:side==="BUY"?-(grossWl+feeWl):(grossWl-feeWl),at:Date.now()};
   const h=tradingHistory.get(s.user.user_id)||[]; h.unshift(item); tradingHistory.set(s.user.user_id,h.slice(0,100));
-  return {success:true,order:item,game_wallet:w,holdings:p};
+  return {success:true,order:item,wallet:w,holdings:p};
 });
 app.get("/api/player/trading-history", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
@@ -708,23 +727,19 @@ app.post("/api/gacha/spin", async (request, reply) => {
   const chestId = normalize(body?.chest_id);
   const count = Math.max(1, Math.min(10, amountValue(body?.count) || 1));
   const chest = configStore.gacha[chestId];
-  if (!chest || !chest.enabled) return reply.code(404).send({ success:false, message:"Gacha chest unavailable." });
+  if (!chest || !chest.enabled) return reply.code(404).send({ success:false, message:"Reward chest unavailable." });
   if (!Array.isArray(chest.rewards) || chest.rewards.length === 0) return reply.code(400).send({ success:false, message:"This chest has no rewards." });
-  const cost = Math.max(1, amountValue(chest.entryLocks)) * count;
-  const wallet = getGameWallet(s.user.user_id);
-  if (wallet.locks < cost) return reply.code(400).send({ success:false, message:`Not enough Game Locks. Need ${cost}.`, game_wallet:wallet });
   const rewards: PendingReward[] = [];
   for (let i=0;i<count;i++) {
     const r = weightedGachaReward(chest);
     rewards.push({item_id:r.item_id, amount:r.amount, name:r.name, image:r.image || undefined, rarity:r.rarity});
   }
-  wallet.locks -= cost;
   const existing = pendingGacha.get(s.user.user_id) ?? [];
   pendingGacha.set(s.user.user_id, [...existing, ...rewards]);
   const history = gachaHistory.get(s.user.user_id) ?? [];
-  history.unshift({id:crypto.randomUUID(),chestId:chest.id,chestTitle:chest.title,entryLocks:cost,rewards,at:Date.now()});
+  history.unshift({id:crypto.randomUUID(),chestId:chest.id,chestTitle:chest.title,entryLocks:0,rewards,at:Date.now()});
   gachaHistory.set(s.user.user_id, history.slice(0,50));
-  return { success:true, chest:{id:chest.id,title:chest.title}, count, cost, rewards, game_wallet:wallet };
+  return { success:true, chest:{id:chest.id,title:chest.title}, count, cost:0, rewards };
 });
 
 app.get("/api/player/gacha-history", async (request, reply) => {
@@ -903,8 +918,6 @@ app.put("/api/admin/trading/settings", async (request: FastifyRequest<{ Body: an
   const body=parseJsonBody(request.body);
   if(body.enabled!==undefined) configStore.trading.enabled=Boolean(body.enabled);
   if(body.feeBps!==undefined) configStore.trading.feeBps=Math.max(0,Math.min(1000,Number(body.feeBps)||0));
-  if(body.minLocks!==undefined) configStore.trading.minLocks=Math.max(1,amountValue(body.minLocks)||1);
-  if(body.maxLocks!==undefined) configStore.trading.maxLocks=Math.max(configStore.trading.minLocks,amountValue(body.maxLocks)||configStore.trading.maxLocks);
   savePersistedConfig(); return {success:true,trading:configStore.trading};
 });
 app.put("/api/admin/trading/assets/:symbol", async (request: FastifyRequest<{ Params: { symbol: string }; Body: any }>, reply) => {
