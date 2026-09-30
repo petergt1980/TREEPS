@@ -16,9 +16,9 @@
 -- ============================================================
 
 -- IMPORTANT: update WEB_BASE_URL whenever the Quick Tunnel URL changes.
-local WEB_BASE_URL = "https://gtpstreps-q83dsvlyb-petergts-projects-38342bf6.vercel.app"
+local WEB_BASE_URL = "https://gtpstreeps.netlify.app/"
 
-local SHARED_SECRET = "4D5F454C66278EE075F2CA5DE049E0DA1D95FAD937F0949E842DE7FF7CE9AAC9"
+local SHARED_SECRET = "3cb4315652fdb7147aa51506ba5684eba6883679bc6b41b53d8e4cf46abaf274"
 
 local WEB_HEALTH_URL            = WEB_BASE_URL .. "/health"
 local WEB_VERIFY_URL            = WEB_BASE_URL .. "/api/auth/verify-link"

@@ -104,7 +104,7 @@ const DEFAULT_GAMES: Record<string, GameConfig> = {
   reaction:{id:"reaction",enabled:true,title:"REACTION",description:"Test response time",badge:"NEW",stakes:[10,25,50,100,250,500],maxStake:5000,payoutScale:1},
   luckywheel:{id:"luckywheel",enabled:true,title:"LUCKY WHEEL",description:"Free cosmetic spin",badge:"HOT",stakes:[10,25,50,100,250,500],maxStake:5000,payoutScale:1}
 };
-const DEFAULT_SITE: SiteConfig = { siteName:"TREE PS",tagline:"PRIVATE SERVER",accent:"#6b66ff",supportText:"GrowID verified platform",dailyGameLocks:1000,gameBonusCooldownHours:24,gameMaxStake:5000,adminPanelEnabled:true,marketRefreshMs:5000 };
+const DEFAULT_SITE: SiteConfig = { siteName:"TREE",tagline:"PRIVATE SERVER",accent:"#6b66ff",supportText:"GrowID verified platform",dailyGameLocks:1000,gameBonusCooldownHours:24,gameMaxStake:5000,adminPanelEnabled:true,marketRefreshMs:5000 };
 const DEFAULT_GACHA: Record<string,GachaChest> = {
   basic:{id:"basic",enabled:true,title:"BASIC CHEST",description:"A starter chest with common and rare rewards.",badge:"STARTER",icon:"",entryLocks:50,rewards:[
     {id:"b1",name:"World Lock",item_id:242,amount:1,rarity:"COMMON",chance:55,image:""},
