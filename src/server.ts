@@ -63,7 +63,7 @@ type PendingReward = { item_id: number; amount: number; name?: string; image?: s
 type Session = { user: User; expiresAt: number };
 type GameConfig = { id: string; enabled: boolean; title: string; description: string; badge: string; stakes: number[]; maxStake: number; payoutScale: number };
 type GachaReward = { id:string; name:string; item_id:number; amount:number; rarity:string; chance:number; image:string };
-type GachaChest = { id:string; enabled:boolean; title:string; description:string; badge:string; icon:string; entryLocks:number; rewards:GachaReward[] };
+type GachaChest = { id:string; enabled:boolean; title:string; description:string; badge:string; icon:string; rewards:GachaReward[] };
 type SiteConfig = {
   siteName: string; tagline: string; accent: string; supportText: string;
   dailyGameLocks: number; gameBonusCooldownHours: number; gameMaxStake: number;
@@ -76,7 +76,7 @@ type PersistedConfig = { site: SiteConfig; games: Record<string, GameConfig>; as
 const DATABASE_URL = (process.env.DATABASE_URL ?? "").trim();
 const pool = DATABASE_URL ? new Pool({
   connectionString: DATABASE_URL,
-  ssl: DATABASE_URL.includes("neon.tech") || DATABASE_URL.includes("sslmode=require") || process.env.VERCEL === "1" || process.env.NETLIFY === "true" ? { rejectUnauthorized: false } : undefined,
+  ssl: DATABASE_URL.includes("neon.tech") || process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
   max: 10,
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
@@ -104,21 +104,21 @@ const DEFAULT_GAMES: Record<string, GameConfig> = {
   reaction:{id:"reaction",enabled:true,title:"REACTION",description:"Test response time",badge:"NEW",stakes:[10,25,50,100,250,500],maxStake:5000,payoutScale:1},
   luckywheel:{id:"luckywheel",enabled:true,title:"LUCKY WHEEL",description:"Free cosmetic spin",badge:"HOT",stakes:[10,25,50,100,250,500],maxStake:5000,payoutScale:1}
 };
-const DEFAULT_SITE: SiteConfig = { siteName:"TREE",tagline:"PRIVATE SERVER",accent:"#6b66ff",supportText:"GrowID verified platform",dailyGameLocks:1000,gameBonusCooldownHours:24,gameMaxStake:5000,adminPanelEnabled:true,marketRefreshMs:5000 };
+const DEFAULT_SITE: SiteConfig = { siteName:"TREE PS",tagline:"PRIVATE SERVER",accent:"#6b66ff",supportText:"GrowID verified platform",dailyGameLocks:1000,gameBonusCooldownHours:24,gameMaxStake:5000,adminPanelEnabled:true,marketRefreshMs:5000 };
 const DEFAULT_GACHA: Record<string,GachaChest> = {
-  basic:{id:"basic",enabled:true,title:"BASIC CHEST",description:"A starter chest with common and rare rewards.",badge:"STARTER",icon:"",entryLocks:50,rewards:[
+  basic:{id:"basic",enabled:true,title:"BASIC CHEST",description:"A starter chest with common and rare rewards.",badge:"STARTER",icon:"",rewards:[
     {id:"b1",name:"World Lock",item_id:242,amount:1,rarity:"COMMON",chance:55,image:""},
     {id:"b2",name:"Diamond Lock",item_id:1796,amount:1,rarity:"RARE",chance:30,image:""},
     {id:"b3",name:"Blue Gem Lock",item_id:7188,amount:1,rarity:"EPIC",chance:12,image:""},
     {id:"b4",name:"Golden Gem Lock",item_id:8470,amount:1,rarity:"LEGENDARY",chance:3,image:""}
   ]},
-  premium:{id:"premium",enabled:true,title:"PREMIUM CHEST",description:"A higher-tier chest with stronger internal rewards.",badge:"PREMIUM",icon:"",entryLocks:150,rewards:[
+  premium:{id:"premium",enabled:true,title:"PREMIUM CHEST",description:"A higher-tier chest with stronger internal rewards.",badge:"PREMIUM",icon:"",rewards:[
     {id:"p1",name:"Diamond Lock",item_id:1796,amount:1,rarity:"COMMON",chance:45,image:""},
     {id:"p2",name:"Blue Gem Lock",item_id:7188,amount:1,rarity:"RARE",chance:35,image:""},
     {id:"p3",name:"Golden Gem Lock",item_id:8470,amount:1,rarity:"EPIC",chance:17,image:""},
     {id:"p4",name:"Legendary Token",item_id:1320,amount:1,rarity:"LEGENDARY",chance:3,image:""}
   ]},
-  legendary:{id:"legendary",enabled:true,title:"LEGENDARY VAULT",description:"The highest-tier collection chest.",badge:"LEGENDARY",icon:"",entryLocks:500,rewards:[
+  legendary:{id:"legendary",enabled:true,title:"LEGENDARY VAULT",description:"The highest-tier collection chest.",badge:"LEGENDARY",icon:"",rewards:[
     {id:"l1",name:"Blue Gem Lock",item_id:7188,amount:1,rarity:"COMMON",chance:40,image:""},
     {id:"l2",name:"Golden Gem Lock",item_id:8470,amount:1,rarity:"RARE",chance:35,image:""},
     {id:"l3",name:"Phoenix Item",item_id:1796,amount:5,rarity:"EPIC",chance:20,image:""},
@@ -143,13 +143,12 @@ let configStore: PersistedConfig = { ...DEFAULT_PERSISTED, games:{...DEFAULT_GAM
 const links = new Map<string, LinkCode>();
 const sessions = new Map<string, Session>();
 const wallets = new Map<number, Wallet>();
-const gameWallets = new Map<number, { locks: number; lastBonusAt: number }>();
 const gameRounds = new Map<string, { userId: number; gameId: string; stake: number; createdAt: number }>();
-const gameHistory = new Map<number, Array<{ id:string; gameId:string; stake:number; outcome:string; multiplier:number; payout:number; net:number; at:number }>>();
+const gameHistory = new Map<number, Array<{ id:string; gameId:string; outcome:string; at:number }>>();
 const pendingGacha = new Map<number, PendingReward[]>();
-const gachaHistory = new Map<number, Array<{ id:string; chestId:string; chestTitle:string; entryLocks:number; rewards:PendingReward[]; at:number }>>();
+const gachaHistory = new Map<number, Array<{ id:string; chestId:string; chestTitle:string; entryBalance:number; rewards:PendingReward[]; at:number }>>();
 const tradingPortfolios = new Map<number, Record<string, number>>();
-const tradingHistory = new Map<number, Array<{id:string;symbol:string;side:"BUY"|"SELL";amount:number;priceLocks:number;grossLocks:number;feeLocks:number;netLocks:number;at:number}>>();
+const tradingHistory = new Map<number, Array<{id:string;symbol:string;side:"BUY"|"SELL";amount:number;priceLocks:number;grossBalance:number;feeBalance:number;netBalance:number;at:number}>>();
 const processedTransactions = new Map<string, { at: number; result: any }>();
 const chats: Array<{ id: string; user: string; text: string; time: string }> = [];
 const assets = new Map<string, string>();
@@ -181,7 +180,6 @@ type DbState = {
   links:Array<[string,LinkCode]>;
   sessions:Array<[string,Session]>;
   wallets:Record<string,Wallet>;
-  gameWallets:Record<string,{locks:number;lastBonusAt:number}>;
   gameHistory:Record<string,any[]>;
   pendingGacha:Record<string,PendingReward[]>;
   gachaHistory:Record<string,any[]>;
@@ -201,7 +199,6 @@ function snapshotState(): DbState {
     links: mapToArray(links),
     sessions: mapToArray(sessions),
     wallets: mapToObject(wallets),
-    gameWallets: mapToObject(gameWallets),
     gameHistory: mapToObject(gameHistory),
     pendingGacha: mapToObject(pendingGacha),
     gachaHistory: mapToObject(gachaHistory),
@@ -232,7 +229,6 @@ function hydrateState(raw:any) {
   links.clear(); for (const [k,v] of (Array.isArray(raw?.links)?raw.links:[])) links.set(String(k),v);
   sessions.clear(); for (const [k,v] of (Array.isArray(raw?.sessions)?raw.sessions:[])) sessions.set(String(k),v);
   wallets.clear(); for (const [k,v] of Object.entries(raw?.wallets||{})) wallets.set(Number(k), v as Wallet);
-  gameWallets.clear(); for (const [k,v] of Object.entries(raw?.gameWallets||{})) gameWallets.set(Number(k), v as {locks:number;lastBonusAt:number});
   gameHistory.clear(); for (const [k,v] of Object.entries(raw?.gameHistory||{})) gameHistory.set(Number(k), v as any[]);
   pendingGacha.clear(); for (const [k,v] of Object.entries(raw?.pendingGacha||{})) pendingGacha.set(Number(k), v as PendingReward[]);
   gachaHistory.clear(); for (const [k,v] of Object.entries(raw?.gachaHistory||{})) gachaHistory.set(Number(k), v as any[]);
@@ -307,11 +303,6 @@ function emptyWallet(): Wallet { return { wl: 0, dl: 0, bgl: 0, ggl: 0, gems: 0 
 function getWallet(userId: number): Wallet {
   let w = wallets.get(userId);
   if (!w) { w = emptyWallet(); wallets.set(userId, w); }
-  return w;
-}
-function getGameWallet(userId: number) {
-  let w = gameWallets.get(userId);
-  if (!w) { w = { locks: 0, lastBonusAt: 0 }; gameWallets.set(userId, w); }
   return w;
 }
 function getTradingPortfolio(userId:number){
@@ -428,21 +419,15 @@ function amountValue(v: unknown): number {
 }
 function envList(name: string): string[] {
   return String(process.env[name] || "")
-    .split(/[\s,;\n]+/)
+    .split(",")
     .map(v => v.trim().replace(/^['\"]|['\"]$/g, "").toLowerCase())
     .filter(Boolean);
 }
-function adminEmailList(): string[] {
-  return [...new Set([
-    ...envList("TREE_PS_ADMIN_EMAILS"),
-    ...envList("TREE_PS_ADMIN_EMAIL"),
-    ...envList("ADMIN_EMAILS"),
-    ...envList("ADMIN_EMAIL")
-  ].map(normalizeEmail).filter(Boolean))];
-}
 function isAdminEmail(email:string|undefined){
   const normalized = normalizeEmail(email);
-  return !!normalized && adminEmailList().includes(normalized);
+  if (!normalized) return false;
+  const configured = [...envList("TREE_PS_ADMIN_EMAILS"), ...envList("TREE_PS_ADMIN_EMAIL")];
+  return configured.includes(normalized);
 }
 function isAdminUser(user: User): boolean {
   const ids = envList("TREE_PS_ADMIN_USER_IDS");
@@ -472,7 +457,7 @@ function publicGameConfigs() { return Object.values(configStore.games).map(g=>({
 // DATABASE_URL from crashing the entire Vercel function before /health can respond.
 autoCleanup();
 
-app.get("/health", async () => ({ ok: true, service: "tree-ps-backend", version: "TREE-API-V41", time: new Date().toISOString() }));
+app.get("/health", async () => ({ ok: true, service: "tree-ps-backend", version: "TREE-DB-V13", time: new Date().toISOString() }));
 app.get("/api/system/database", async () => ({ success:true, provider:"Neon PostgreSQL", persistent:true, browserStorage:"session_token_only", message:"Persistent application data is stored in Neon; localStorage only caches the current session token." }));
 
 
@@ -512,7 +497,7 @@ app.post("/api/auth/register/", async (request, reply) => {
   return {success:true,session:token,user,is_admin:isAdminUser(user),requiresGrowIDLink:true};
 });
 
-app.get("/api/auth/version", async () => ({success:true,version:"TREE-AUTH-V41",register:true,login:true,link:true}));
+app.get("/api/auth/version", async () => ({success:true,version:"TREE-AUTH-V10",register:true,login:true,link:true}));
 
 app.post("/api/auth/login", async (request, reply) => {
   const body = parseJsonBody(request.body);
@@ -530,24 +515,13 @@ app.get("/api/auth/admin-status", async (request, reply) => {
   const s = authSession(request);
   if (!s) return reply.code(401).send({ authenticated:false, is_admin:false });
   const email = normalizeEmail(s.user.email);
-  const envEmails = adminEmailList();
+  const envEmails = [...envList("TREE_PS_ADMIN_EMAILS"), ...envList("TREE_PS_ADMIN_EMAIL")];
   const envEmailMatch = !!email && envEmails.includes(email);
   const account = s.user.web_account_id ? [...webAccounts.values()].find(a => a.id === s.user.web_account_id) : (email ? webAccounts.get(email) : undefined);
   const accountFlag = !!account?.is_admin;
   const growidMatch = envList("TREE_PS_ADMIN_GROWIDS").includes(normalizeEmail(s.user.growid)) || envList("TREE_PS_ADMIN_GROWIDS").includes(normalizeEmail(s.user.clean_name));
   const userIdMatch = envList("TREE_PS_ADMIN_USER_IDS").includes(String(s.user.user_id));
   return { authenticated:true, is_admin: envEmailMatch || accountFlag || growidMatch || userIdMatch, email, envEmailMatch, accountFlag, growidMatch, userIdMatch };
-});
-
-app.get("/api/auth/admin-config", async (request, reply) => {
-  if (!authSession(request)) return reply.code(401).send({ authenticated:false });
-  return {
-    authenticated:true,
-    runtimeConfigured: adminEmailList().length > 0 || envList("TREE_PS_ADMIN_GROWIDS").length > 0 || envList("TREE_PS_ADMIN_USER_IDS").length > 0,
-    emailConfigured: adminEmailList().length > 0,
-    growidConfigured: envList("TREE_PS_ADMIN_GROWIDS").length > 0,
-    userIdConfigured: envList("TREE_PS_ADMIN_USER_IDS").length > 0
-  };
 });
 
 app.get("/api/auth/account", async (request, reply) => {
@@ -590,7 +564,7 @@ const verifyLinkHandler = async (request: FastifyRequest<{ Body: any }>, reply: 
   sessions.set(session, { user, expiresAt: Date.now() + SESSION_TTL_MS });
   getWallet(userId); // creates zero wallet only; never seeds a balance
 
-  return { success: true, message: "GrowID linked successfully.", session, user, version: "TREE-API-V41" };
+  return { success: true, message: "GrowID linked successfully.", session, user, version: "TREE-DB-V13" };
 };
 
 app.post("/api/auth/verify-link", verifyLinkHandler);
@@ -624,12 +598,13 @@ app.get("/api/player/wallet", async (request, reply) => {
 });
 app.get("/api/player/game-wallet", async (request, reply) => {
   const s = authSession(request); if (!s) return reply.code(401).send({ message: "Unauthorized" });
-  return { success: true, game_wallet: { locks: 0, lastBonusAt: 0, mode: "free-play" } };
+  // Backward-compatible endpoint exposing the normal wallet balance.
+  return { success: true, balance: getWallet(s.user.user_id) };
 });
 
 app.post("/api/game/bonus", async (request, reply) => {
   const s = authSession(request); if (!s) return reply.code(401).send({ message: "Unauthorized" });
-  return { success: true, amount: 0, game_wallet: { locks: 0, lastBonusAt: 0, mode: "free-play" }, message: "Game Hub uses free-play mode; no Game Locks are used." };
+  return reply.code(410).send({ success: false, message: "Separate game-credit bonuses are disabled. Use the normal wallet balance." });
 });
 
 app.post("/api/games/play", async (request, reply) => {
@@ -640,10 +615,11 @@ app.post("/api/games/play", async (request, reply) => {
   if (!cfg || !cfg.enabled) return reply.code(400).send({ success: false, message: "Game is disabled." });
   const roundId = crypto.randomUUID();
   const out = gameOutcome(gameId);
+  gameRounds.delete(roundId);
   const history = gameHistory.get(s.user.user_id) ?? [];
-  history.unshift({ id: roundId, gameId, stake: 0, outcome: out.outcome, multiplier: 0, payout: 0, net: 0, at: Date.now() });
+  history.unshift({ id: roundId, gameId, outcome: out.outcome, at: Date.now() });
   gameHistory.set(s.user.user_id, history.slice(0, 50));
-  return { success: true, round_id: roundId, game_id: gameId, outcome: out.outcome, score: Math.max(0, Math.round(out.multiplier * 100)), game_wallet: { locks: 0, lastBonusAt: 0, mode: "free-play" } };
+  return { success: true, round_id: roundId, game_id: gameId, outcome: out.outcome, balance: getWallet(s.user.user_id) };
 });
 
 app.get("/api/player/game-history", async (request, reply) => {
@@ -660,53 +636,35 @@ app.get("/api/player/history", async (request, reply) => {
   return { success: true, items: [] };
 });
 
-const CURRENCY_UNITS: Record<keyof Wallet, number> = { wl:1, dl:100, bgl:10000, ggl:1000000, gems:1 };
-function currencyBalanceInBase(w:Wallet, currency:keyof Wallet){ return (Number(w[currency])||0) * CURRENCY_UNITS[currency]; }
-function deductCurrency(w:Wallet, currency:keyof Wallet, baseUnits:number){
-  const units = CURRENCY_UNITS[currency];
-  const need = Math.ceil(Math.max(0,baseUnits) / units);
-  if ((w[currency]||0) < need) return null;
-  w[currency] = Math.max(0,(w[currency]||0)-need);
-  return need;
-}
-function creditCurrency(w:Wallet, currency:keyof Wallet, baseUnits:number){
-  const units=CURRENCY_UNITS[currency];
-  const add=Math.floor(Math.max(0,baseUnits)/units);
-  w[currency]=(w[currency]||0)+add;
-  return add;
-}
-
 app.get("/api/trading/config", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
-  return {success:true, trading:{enabled:configStore.trading.enabled,feeBps:configStore.trading.feeBps,assets:Object.values(configStore.trading.assets).filter(a=>a.enabled),currencies:["wl","dl","bgl","ggl"]}};
+  return {success:true, trading:{enabled:configStore.trading.enabled,feeBps:configStore.trading.feeBps,minLocks:configStore.trading.minLocks,maxLocks:configStore.trading.maxLocks,assets:Object.values(configStore.trading.assets).filter(a=>a.enabled)}};
 });
 app.get("/api/trading/portfolio", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
-  return {success:true,wallet:getWallet(s.user.user_id),holdings:getTradingPortfolio(s.user.user_id),history:getTradingHistory(s.user.user_id).slice(-50).reverse()};
+  return {success:true, wallet:getWallet(s.user.user_id), holdings:getTradingPortfolio(s.user.user_id), history:getTradingHistory(s.user.user_id).slice(-50).reverse()};
 });
 app.post("/api/trading/order", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
-  if(!configStore.trading.enabled) return reply.code(503).send({success:false,message:"Trading is disabled."});
+  if(!configStore.trading.enabled) return reply.code(503).send({success:false,message:"Balance Trading is disabled."});
   const body=parseJsonBody(request.body);
   const symbol=normalize(body?.symbol).toUpperCase(); const side=normalize(body?.side).toUpperCase();
-  const currency=validCurrency(body?.currency) && body?.currency !== "gems" ? String(body.currency).toLowerCase() as keyof Wallet : "wl";
   const asset=configStore.trading.assets[symbol]; const amount=safeTradeAmount(body?.amount);
   if(!asset || !asset.enabled || !["BUY","SELL"].includes(side)) return reply.code(400).send({success:false,message:"Invalid trading order."});
   if(amount < asset.minOrder || amount > asset.maxOrder) return reply.code(400).send({success:false,message:`Order amount must be between ${asset.minOrder} and ${asset.maxOrder} ${symbol}.`});
-  const grossWl=Math.max(1,Math.round(amount*asset.priceLocks));
-  const feeWl=Math.floor(grossWl*Math.max(0,Number(configStore.trading.feeBps||0))/10000);
-  const w=getWallet(s.user.user_id); const p=getTradingPortfolio(s.user.user_id); p[symbol]=Number(p[symbol]||0);
-  if(side==="BUY") {
-    const required=grossWl+feeWl;
-    const debited=deductCurrency(w,currency,required);
-    if(debited===null) return reply.code(400).send({success:false,message:`Not enough ${currency.toUpperCase()} balance.`,wallet:w});
-    p[symbol]=Math.round((p[symbol]+amount)*1_000_000)/1_000_000;
-  } else {
+  const gross=Math.max(1,Math.round(amount*asset.priceLocks));
+  if(gross < configStore.trading.minLocks || gross > configStore.trading.maxLocks) return reply.code(400).send({success:false,message:"Order size is outside the configured balance limits."});
+  const fee=Math.floor(gross*Math.max(0,Number(configStore.trading.feeBps||0))/10000);
+  const w=getWallet(s.user.user_id); const p=getTradingPortfolio(s.user.user_id);
+  p[symbol]=Number(p[symbol]||0);
+  if(side==="BUY"){
+    const total=gross+fee; if(w.wl<total) return reply.code(400).send({success:false,message:`Not enough WL balance. Need ${total}.`,wallet:w});
+    w.wl-=total; p[symbol]=Math.round((p[symbol]+amount)*1_000_000)/1_000_000;
+  }else{
     if(p[symbol] < amount) return reply.code(400).send({success:false,message:`Insufficient ${symbol} holdings.`});
-    p[symbol]=Math.round((p[symbol]-amount)*1_000_000)/1_000_000;
-    creditCurrency(w,currency,Math.max(0,grossWl-feeWl));
+    p[symbol]=Math.round((p[symbol]-amount)*1_000_000)/1_000_000; w.wl+=Math.max(0,gross-fee);
   }
-  const item={id:crypto.randomUUID(),symbol,side:side as "BUY"|"SELL",amount,priceLocks:asset.priceLocks,currency,grossLocks:grossWl,feeLocks:feeWl,netLocks:side==="BUY"?-(grossWl+feeWl):(grossWl-feeWl),at:Date.now()};
+  const item={id:crypto.randomUUID(),symbol,side:side as "BUY"|"SELL",amount,priceLocks:asset.priceLocks,grossBalance:gross,feeBalance:fee,netBalance:side==="BUY"?-(gross+fee):(gross-fee),at:Date.now()};
   const h=tradingHistory.get(s.user.user_id)||[]; h.unshift(item); tradingHistory.set(s.user.user_id,h.slice(0,100));
   return {success:true,order:item,wallet:w,holdings:p};
 });
@@ -727,8 +685,10 @@ app.post("/api/gacha/spin", async (request, reply) => {
   const chestId = normalize(body?.chest_id);
   const count = Math.max(1, Math.min(10, amountValue(body?.count) || 1));
   const chest = configStore.gacha[chestId];
-  if (!chest || !chest.enabled) return reply.code(404).send({ success:false, message:"Reward chest unavailable." });
+  if (!chest || !chest.enabled) return reply.code(404).send({ success:false, message:"Gacha chest unavailable." });
   if (!Array.isArray(chest.rewards) || chest.rewards.length === 0) return reply.code(400).send({ success:false, message:"This chest has no rewards." });
+  const cost = 0;
+  const wallet = getWallet(s.user.user_id);
   const rewards: PendingReward[] = [];
   for (let i=0;i<count;i++) {
     const r = weightedGachaReward(chest);
@@ -737,9 +697,9 @@ app.post("/api/gacha/spin", async (request, reply) => {
   const existing = pendingGacha.get(s.user.user_id) ?? [];
   pendingGacha.set(s.user.user_id, [...existing, ...rewards]);
   const history = gachaHistory.get(s.user.user_id) ?? [];
-  history.unshift({id:crypto.randomUUID(),chestId:chest.id,chestTitle:chest.title,entryLocks:0,rewards,at:Date.now()});
+  history.unshift({id:crypto.randomUUID(),chestId:chest.id,chestTitle:chest.title,entryBalance:cost,rewards,at:Date.now()});
   gachaHistory.set(s.user.user_id, history.slice(0,50));
-  return { success:true, chest:{id:chest.id,title:chest.title}, count, cost:0, rewards };
+  return { success:true, chest:{id:chest.id,title:chest.title}, count, cost, rewards, wallet };
 });
 
 app.get("/api/player/gacha-history", async (request, reply) => {
@@ -825,7 +785,7 @@ app.post("/api/lua/withdraw-rollback", async (request: FastifyRequest<{ Body: an
   return { success: true, action: "withdraw_rollback", currency, amount, wallet };
 });
 
-app.get("/api/games/config", async () => ({ success:true, site:{ dailyGameLocks:configStore.site.dailyGameLocks, gameBonusCooldownHours:configStore.site.gameBonusCooldownHours, gameMaxStake:configStore.site.gameMaxStake }, games:publicGameConfigs() }));
+app.get("/api/games/config", async () => ({ success:true, site:{ gameBalanceMode:true }, games:publicGameConfigs() }));
 app.get("/api/config/site", async () => ({ success:true, site:configStore.site }));
 
 app.get("/api/admin/accounts", async (request: FastifyRequest, reply) => {
@@ -890,7 +850,7 @@ app.post("/api/admin/gacha/chests", async (request: FastifyRequest<{ Body: any }
   if (!id) return reply.code(400).send({success:false,message:"Invalid chest id."});
   if (configStore.gacha[id]) return reply.code(409).send({success:false,message:"Chest already exists."});
   const rewards = Array.isArray(body.rewards) ? body.rewards.map((r:any,i:number)=>({id:normalize(r.id)||`${id}-${i+1}`,name:normalize(r.name)||`Reward ${i+1}`,item_id:amountValue(r.item_id),amount:amountValue(r.amount),rarity:normalize(r.rarity)||"COMMON",chance:Number(r.chance)||0,image:normalize(r.image)})).filter((r:any)=>r.item_id>0&&r.amount>0&&r.chance>0).slice(0,20) : [];
-  configStore.gacha[id]={id,enabled:body.enabled!==false,title:normalize(body.title)||id.toUpperCase(),description:normalize(body.description)||"TREE PS Gacha Chest",badge:normalize(body.badge)||"NEW",icon:normalize(body.icon),entryLocks:Math.max(1,amountValue(body.entryLocks)||50),rewards};
+  configStore.gacha[id]={id,enabled:body.enabled!==false,title:normalize(body.title)||id.toUpperCase(),description:normalize(body.description)||"TREE PS Gacha Chest",badge:normalize(body.badge)||"NEW",icon:normalize(body.icon),rewards};
   savePersistedConfig();
   return {success:true,gacha:configStore.gacha[id]};
 });
@@ -901,7 +861,7 @@ app.put("/api/admin/gacha/:id", async (request:FastifyRequest<{Params:{id:string
   if (!current) return reply.code(404).send({success:false,message:"Unknown gacha chest."});
   const body=parseJsonBody(request.body);
   const rewards=Array.isArray(body.rewards)?body.rewards.map((r:any,i:number)=>({id:normalize(r.id)||`${id}-${i+1}`,name:normalize(r.name)||`Reward ${i+1}`,item_id:amountValue(r.item_id),amount:amountValue(r.amount),rarity:normalize(r.rarity)||"COMMON",chance:Number(r.chance)||0,image:normalize(r.image)})).filter((r:any)=>r.item_id>0&&r.amount>0&&r.chance>0).slice(0,20):current.rewards;
-  configStore.gacha[id]={...current,...body,id,entryLocks:Math.max(1,amountValue(body.entryLocks)||current.entryLocks),rewards};
+  configStore.gacha[id]={...current,...body,id,rewards};
   savePersistedConfig();
   return {success:true,gacha:configStore.gacha[id]};
 });
@@ -918,6 +878,8 @@ app.put("/api/admin/trading/settings", async (request: FastifyRequest<{ Body: an
   const body=parseJsonBody(request.body);
   if(body.enabled!==undefined) configStore.trading.enabled=Boolean(body.enabled);
   if(body.feeBps!==undefined) configStore.trading.feeBps=Math.max(0,Math.min(1000,Number(body.feeBps)||0));
+  if(body.minLocks!==undefined) configStore.trading.minLocks=Math.max(1,amountValue(body.minLocks)||1);
+  if(body.maxLocks!==undefined) configStore.trading.maxLocks=Math.max(configStore.trading.minLocks,amountValue(body.maxLocks)||configStore.trading.maxLocks);
   savePersistedConfig(); return {success:true,trading:configStore.trading};
 });
 app.put("/api/admin/trading/assets/:symbol", async (request: FastifyRequest<{ Params: { symbol: string }; Body: any }>, reply) => {
