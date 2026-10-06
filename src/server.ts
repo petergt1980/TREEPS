@@ -49,6 +49,7 @@ app.addHook("onRequest", async (request, reply) => {
 
 const PORT = Number(process.env.PORT ?? 3000);
 const SHARED_SECRET: string = (process.env.TREE_PS_SHARED_SECRET ?? "").trim();
+const SESSION_SECRET = crypto.createHash("sha256").update((process.env.TREE_PS_SESSION_SECRET || SHARED_SECRET || "TREE-PS-LOCAL-SESSION").trim()).digest();
 
 const LINK_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -210,7 +211,7 @@ function snapshotState(): DbState {
   };
 }
 
-function hydrateState(raw:any) {
+function hydrateState(raw:any, options: { includeWallets?: boolean } = {}) {
   const cfg = raw?.config || {};
   configStore = {
     site:{...DEFAULT_SITE,...(cfg.site||{})},
@@ -228,16 +229,18 @@ function hydrateState(raw:any) {
   nextWebAccountId = Math.max(Number(raw?.nextWebAccountId)||100001, ...[...webAccounts.values()].map(a=>a.id+1), 100001);
   links.clear(); for (const [k,v] of (Array.isArray(raw?.links)?raw.links:[])) links.set(String(k),v);
   sessions.clear(); for (const [k,v] of (Array.isArray(raw?.sessions)?raw.sessions:[])) sessions.set(String(k),v);
-  wallets.clear();
-  for (const [k,v] of Object.entries(raw?.wallets||{})) {
-    const rawWallet = v as Partial<Wallet>;
-    wallets.set(Number(k), {
-      wl: Number.isFinite(Number(rawWallet.wl)) ? Math.max(0, Math.floor(Number(rawWallet.wl))) : 0,
-      dl: Number.isFinite(Number(rawWallet.dl)) ? Math.max(0, Math.floor(Number(rawWallet.dl))) : 0,
-      bgl: Number.isFinite(Number(rawWallet.bgl)) ? Math.max(0, Math.floor(Number(rawWallet.bgl))) : 0,
-      ggl: Number.isFinite(Number(rawWallet.ggl)) ? Math.max(0, Math.floor(Number(rawWallet.ggl))) : 0,
-      gems: Number.isFinite(Number(rawWallet.gems)) ? Math.max(0, Math.floor(Number(rawWallet.gems))) : 0,
-    });
+  if (options.includeWallets !== false) {
+    wallets.clear();
+    for (const [k,v] of Object.entries(raw?.wallets||{})) {
+      const rawWallet = v as Partial<Wallet>;
+      wallets.set(Number(k), {
+        wl: Number.isFinite(Number(rawWallet.wl)) ? Math.max(0, Math.floor(Number(rawWallet.wl))) : 0,
+        dl: Number.isFinite(Number(rawWallet.dl)) ? Math.max(0, Math.floor(Number(rawWallet.dl))) : 0,
+        bgl: Number.isFinite(Number(rawWallet.bgl)) ? Math.max(0, Math.floor(Number(rawWallet.bgl))) : 0,
+        ggl: Number.isFinite(Number(rawWallet.ggl)) ? Math.max(0, Math.floor(Number(rawWallet.ggl))) : 0,
+        gems: Number.isFinite(Number(rawWallet.gems)) ? Math.max(0, Math.floor(Number(rawWallet.gems))) : 0,
+      });
+    }
   }
   for (const [id,chest] of Object.entries(configStore.gacha)) {
     configStore.gacha[id] = { ...chest, priceLocks: Math.max(0, amountValue((chest as any).priceLocks)) };
@@ -487,9 +490,33 @@ function validLinkRequest(request: FastifyRequest, rawBody: unknown): boolean {
   const code = normalize(body?.link_code).toUpperCase();
   return /^TREE-[A-F0-9]{4}-[A-F0-9]{4}$/.test(code);
 }
+function createSession(user: User): string {
+  const payload = Buffer.from(JSON.stringify({ v: 1, user, exp: Date.now() + SESSION_TTL_MS })).toString("base64url");
+  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  const token = `${payload}.${signature}`;
+  sessions.set(token, { user, expiresAt: Date.now() + SESSION_TTL_MS });
+  return token;
+}
+
+function decodeSessionToken(token: string): Session | null {
+  const [payload, signature] = String(token || "").split(".");
+  if (!payload || !signature) return null;
+  const expected = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  if (!safeEqual(signature, expected)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!parsed?.user || Number(parsed.exp) <= Date.now()) return null;
+    return { user: parsed.user as User, expiresAt: Number(parsed.exp) };
+  } catch {
+    return null;
+  }
+}
+
 function authSession(request: FastifyRequest): Session | null {
   const token = bearer(request);
   if (!token) return null;
+  const stateless = decodeSessionToken(token);
+  if (stateless) return stateless;
   const s = sessions.get(token);
   if (!s || Date.now() > s.expiresAt) { sessions.delete(token); return null; }
   return s;
@@ -536,7 +563,7 @@ function requireAdmin(request: FastifyRequest): Session | null {
 async function refreshStateFromDb() {
   if (!pool || !dbReady) return;
   const r=await pool.query<{state:any}>("SELECT state FROM treeps_state WHERE id=1");
-  if (r.rowCount && r.rows[0]?.state) hydrateState(r.rows[0].state);
+  if (r.rowCount && r.rows[0]?.state) hydrateState(r.rows[0].state, { includeWallets: false });
 }
 
 function syncAccountAdminFlag(account: WebAccount) {
@@ -572,9 +599,8 @@ app.post("/api/auth/register", async (request, reply) => {
   const salt = crypto.randomBytes(16).toString("hex");
   const account:WebAccount = {id:nextWebAccountId++,email,displayName,passwordHash:hashPassword(password,salt),salt,createdAt:Date.now()};
   webAccounts.set(email,account); saveWebAccounts();
-  const token = crypto.randomBytes(32).toString("hex");
   const user = webAccountUser(account);
-  sessions.set(token,{user,expiresAt:Date.now()+SESSION_TTL_MS});
+  const token = createSession(user);
   return {success:true,session:token,user,is_admin:isAdminUser(user),requiresGrowIDLink:true};
 });
 
@@ -590,9 +616,8 @@ app.post("/api/auth/register/", async (request, reply) => {
   const salt = crypto.randomBytes(16).toString("hex");
   const account:WebAccount = {id:nextWebAccountId++,email,displayName,passwordHash:hashPassword(password,salt),salt,createdAt:Date.now()};
   webAccounts.set(email,account); saveWebAccounts();
-  const token = crypto.randomBytes(32).toString("hex");
   const user = webAccountUser(account);
-  sessions.set(token,{user,expiresAt:Date.now()+SESSION_TTL_MS});
+  const token = createSession(user);
   return {success:true,session:token,user,is_admin:isAdminUser(user),requiresGrowIDLink:true};
 });
 
@@ -604,9 +629,8 @@ app.post("/api/auth/login", async (request, reply) => {
   const password = normalize(body?.password);
   const account = webAccounts.get(email);
   if (!account || !passwordMatches(account,password)) return reply.code(401).send({success:false,message:"Invalid email or password."});
-  const token = crypto.randomBytes(32).toString("hex");
   const user = webAccountUser(account);
-  sessions.set(token,{user,expiresAt:Date.now()+SESSION_TTL_MS});
+  const token = createSession(user);
   return {success:true,session:token,user,is_admin:isAdminUser(user),requiresGrowIDLink:true};
 });
 
@@ -654,15 +678,14 @@ const verifyLinkHandler = async (request: FastifyRequest<{ Body: any }>, reply: 
   if (link.used) return reply.code(409).send({ success: false, message: "Link code already used." });
   if (Date.now() > link.expiresAt) { links.delete(code); return reply.code(410).send({ success: false, message: "Link code expired." }); }
 
-  const linkedWebSession = link.webSessionToken ? sessions.get(link.webSessionToken) : null;
+  const linkedWebSession = link.webSessionToken ? (decodeSessionToken(link.webSessionToken) ?? sessions.get(link.webSessionToken) ?? null) : null;
   const email = linkedWebSession?.user.email;
   const webAccountId = linkedWebSession?.user.web_account_id;
   const user: User = { user_id: userId, growid, clean_name: cleanName, server, ...(email ? {email} : {}), ...(webAccountId ? {web_account_id:webAccountId} : {}) };
   if (isAdminUser(user)) user.is_admin = true;
-  const session = link.webSessionToken && linkedWebSession ? link.webSessionToken : crypto.randomBytes(32).toString("hex");
+  const session = createSession(user);
   link.used = true; link.userId = userId; link.user = user; link.session = session;
-  sessions.set(session, { user, expiresAt: Date.now() + SESSION_TTL_MS });
-  getWallet(userId); // creates zero wallet only; never seeds a balance
+  await dbWallet(userId); // creates a zero wallet only when the player has no wallet
 
   return { success: true, message: "GrowID linked successfully.", session, user, version: "TREE-DB-V13" };
 };
@@ -758,7 +781,7 @@ app.get("/api/trading/config", async (request, reply) => {
 });
 app.get("/api/trading/portfolio", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
-  return {success:true, wallet:getWallet(s.user.user_id), holdings:getTradingPortfolio(s.user.user_id), history:getTradingHistory(s.user.user_id).slice(-50).reverse()};
+  return {success:true, wallet:await dbWallet(s.user.user_id), holdings:getTradingPortfolio(s.user.user_id), history:getTradingHistory(s.user.user_id).slice(-50).reverse()};
 });
 app.post("/api/trading/order", async (request, reply) => {
   const s=authSession(request); if(!s) return reply.code(401).send({message:"Unauthorized"});
@@ -851,18 +874,34 @@ app.get("/api/gacha/pending", async (request, reply) => {
   return { success: true, rewards: pendingGacha.get(s.user.user_id) ?? [] };
 });
 
-// Development/admin helper: seed a pending in-game reward. Protect this before production.
+// Development/admin helper: seed a pending in-game reward.
 app.post("/api/admin/gacha/seed", async (request, reply) => {
   if (!requireAdmin(request)) return reply.code(403).send({ success:false, message:"Admin access required." });
-  const body = request.body as any;
+  const body = parseJsonBody(request.body);
   const userId = amountValue(body?.user_id);
   const itemId = amountValue(body?.item_id);
   const amount = amountValue(body?.amount);
-  if (userId <= 0 || itemId <= 0 || amount <= 0) return reply.code(400).send({ success: false, message: "Invalid reward." });
-  const list = pendingGacha.get(userId) ?? [];
-  list.push({ item_id: itemId, amount, name: normalize(body?.name) || undefined, image: normalize(body?.image) || undefined, rarity: normalize(body?.rarity) || undefined });
+  if (userId <= 0 || itemId <= 0 || amount <= 0) return reply.code(400).send({ success:false, message:"Invalid reward." });
+  const reward: PendingReward = { item_id:itemId, amount, name:normalize(body?.name)||undefined, image:normalize(body?.image)||undefined, rarity:normalize(body?.rarity)||undefined };
+  if (pool) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const row = await client.query(`SELECT rewards FROM treeps_gacha_pending WHERE user_id=$1 FOR UPDATE`, [userId]);
+      const existing = Array.isArray(row.rows[0]?.rewards) ? row.rows[0].rewards as PendingReward[] : [];
+      const list = [...existing, reward];
+      await client.query(`INSERT INTO treeps_gacha_pending (user_id,rewards) VALUES ($1,$2::jsonb) ON CONFLICT (user_id) DO UPDATE SET rewards=EXCLUDED.rewards,updated_at=NOW()`, [userId, JSON.stringify(list)]);
+      await client.query("COMMIT");
+      pendingGacha.set(userId, list);
+      return { success:true, rewards:list };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+  const list = [...(pendingGacha.get(userId) ?? []), reward];
   pendingGacha.set(userId, list);
-  return { success: true, rewards: list };
+  return { success:true, rewards:list };
 });
 
 // Lua asks for pending rewards and consumes them once. The Lua script can restore them on a partial claim failure.
@@ -890,14 +929,30 @@ app.post("/api/lua/gacha-claim", async (request: FastifyRequest<{ Body: any }>, 
 });
 app.post("/api/lua/gacha-restore", async (request: FastifyRequest<{ Body: any }>, reply) => {
   const body = parseJsonBody(request.body);
-  if (!validLuaSecret(request, body)) return reply.code(401).send({ success: false, message: "Unauthorized request." });
-  const userId = amountValue(body?.user_id); const rewards = Array.isArray(body?.rewards) ? body.rewards : [];
-  if (userId <= 0) return reply.code(400).send({ success: false, message: "Invalid user ID." });
+  if (!validLuaSecret(request, body)) return reply.code(401).send({ success:false, message:"Unauthorized request." });
+  const userId = amountValue(body?.user_id);
+  const rewards = Array.isArray(body?.rewards) ? body.rewards : [];
+  if (userId <= 0) return reply.code(400).send({ success:false, message:"Invalid user ID." });
+  if (pool) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const row = await client.query(`SELECT rewards FROM treeps_gacha_pending WHERE user_id=$1 FOR UPDATE`, [userId]);
+      const existing = Array.isArray(row.rows[0]?.rewards) ? row.rows[0].rewards as PendingReward[] : [];
+      const merged = [...rewards, ...existing];
+      await client.query(`INSERT INTO treeps_gacha_pending (user_id,rewards) VALUES ($1,$2::jsonb) ON CONFLICT (user_id) DO UPDATE SET rewards=EXCLUDED.rewards,updated_at=NOW()`, [userId, JSON.stringify(merged)]);
+      await client.query("COMMIT");
+      pendingGacha.set(userId, merged);
+      return { success:true, rewards:merged };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
   const existing = pendingGacha.get(userId) ?? [];
-  const merged=[...rewards,...existing];
+  const merged = [...rewards, ...existing];
   pendingGacha.set(userId, merged);
-  if (pool) await pool.query(`INSERT INTO treeps_gacha_pending (user_id,rewards) VALUES ($1,$2::jsonb) ON CONFLICT (user_id) DO UPDATE SET rewards=EXCLUDED.rewards,updated_at=NOW()`,[userId,JSON.stringify(merged)]);
-  return { success: true, rewards: merged };
+  return { success:true, rewards:merged };
 });
 
 const currencyMap = { wl: "wl", dl: "dl", bgl: "bgl", ggl: "ggl" } as const;
