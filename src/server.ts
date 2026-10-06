@@ -63,7 +63,7 @@ type PendingReward = { item_id: number; amount: number; name?: string; image?: s
 type Session = { user: User; expiresAt: number };
 type GameConfig = { id: string; enabled: boolean; title: string; description: string; badge: string; stakes: number[]; maxStake: number; payoutScale: number };
 type GachaReward = { id:string; name:string; item_id:number; amount:number; rarity:string; chance:number; image:string };
-type GachaChest = { id:string; enabled:boolean; title:string; description:string; badge:string; icon:string; rewards:GachaReward[] };
+type GachaChest = { id:string; enabled:boolean; title:string; description:string; badge:string; icon:string; priceLocks:number; rewards:GachaReward[] };
 type SiteConfig = {
   siteName: string; tagline: string; accent: string; supportText: string;
   dailyGameLocks: number; gameBonusCooldownHours: number; gameMaxStake: number;
@@ -106,19 +106,19 @@ const DEFAULT_GAMES: Record<string, GameConfig> = {
 };
 const DEFAULT_SITE: SiteConfig = { siteName:"TREE PS",tagline:"PRIVATE SERVER",accent:"#6b66ff",supportText:"GrowID verified platform",dailyGameLocks:1000,gameBonusCooldownHours:24,gameMaxStake:5000,adminPanelEnabled:true,marketRefreshMs:5000 };
 const DEFAULT_GACHA: Record<string,GachaChest> = {
-  basic:{id:"basic",enabled:true,title:"BASIC CHEST",description:"A starter chest with common and rare rewards.",badge:"STARTER",icon:"",rewards:[
+  basic:{id:"basic",enabled:true,title:"BASIC CHEST",description:"A starter chest with common and rare rewards.",badge:"STARTER",icon:"",priceLocks:10,rewards:[
     {id:"b1",name:"World Lock",item_id:242,amount:1,rarity:"COMMON",chance:55,image:""},
     {id:"b2",name:"Diamond Lock",item_id:1796,amount:1,rarity:"RARE",chance:30,image:""},
     {id:"b3",name:"Blue Gem Lock",item_id:7188,amount:1,rarity:"EPIC",chance:12,image:""},
     {id:"b4",name:"Golden Gem Lock",item_id:8470,amount:1,rarity:"LEGENDARY",chance:3,image:""}
   ]},
-  premium:{id:"premium",enabled:true,title:"PREMIUM CHEST",description:"A higher-tier chest with stronger internal rewards.",badge:"PREMIUM",icon:"",rewards:[
+  premium:{id:"premium",enabled:true,title:"PREMIUM CHEST",description:"A higher-tier chest with stronger internal rewards.",badge:"PREMIUM",icon:"",priceLocks:50,rewards:[
     {id:"p1",name:"Diamond Lock",item_id:1796,amount:1,rarity:"COMMON",chance:45,image:""},
     {id:"p2",name:"Blue Gem Lock",item_id:7188,amount:1,rarity:"RARE",chance:35,image:""},
     {id:"p3",name:"Golden Gem Lock",item_id:8470,amount:1,rarity:"EPIC",chance:17,image:""},
     {id:"p4",name:"Legendary Token",item_id:1320,amount:1,rarity:"LEGENDARY",chance:3,image:""}
   ]},
-  legendary:{id:"legendary",enabled:true,title:"LEGENDARY VAULT",description:"The highest-tier collection chest.",badge:"LEGENDARY",icon:"",rewards:[
+  legendary:{id:"legendary",enabled:true,title:"LEGENDARY VAULT",description:"The highest-tier collection chest.",badge:"LEGENDARY",icon:"",priceLocks:250,rewards:[
     {id:"l1",name:"Blue Gem Lock",item_id:7188,amount:1,rarity:"COMMON",chance:40,image:""},
     {id:"l2",name:"Golden Gem Lock",item_id:8470,amount:1,rarity:"RARE",chance:35,image:""},
     {id:"l3",name:"Phoenix Item",item_id:1796,amount:5,rarity:"EPIC",chance:20,image:""},
@@ -228,7 +228,20 @@ function hydrateState(raw:any) {
   nextWebAccountId = Math.max(Number(raw?.nextWebAccountId)||100001, ...[...webAccounts.values()].map(a=>a.id+1), 100001);
   links.clear(); for (const [k,v] of (Array.isArray(raw?.links)?raw.links:[])) links.set(String(k),v);
   sessions.clear(); for (const [k,v] of (Array.isArray(raw?.sessions)?raw.sessions:[])) sessions.set(String(k),v);
-  wallets.clear(); for (const [k,v] of Object.entries(raw?.wallets||{})) wallets.set(Number(k), v as Wallet);
+  wallets.clear();
+  for (const [k,v] of Object.entries(raw?.wallets||{})) {
+    const rawWallet = v as Partial<Wallet>;
+    wallets.set(Number(k), {
+      wl: Number.isFinite(Number(rawWallet.wl)) ? Math.max(0, Math.floor(Number(rawWallet.wl))) : 0,
+      dl: Number.isFinite(Number(rawWallet.dl)) ? Math.max(0, Math.floor(Number(rawWallet.dl))) : 0,
+      bgl: Number.isFinite(Number(rawWallet.bgl)) ? Math.max(0, Math.floor(Number(rawWallet.bgl))) : 0,
+      ggl: Number.isFinite(Number(rawWallet.ggl)) ? Math.max(0, Math.floor(Number(rawWallet.ggl))) : 0,
+      gems: Number.isFinite(Number(rawWallet.gems)) ? Math.max(0, Math.floor(Number(rawWallet.gems))) : 0,
+    });
+  }
+  for (const [id,chest] of Object.entries(configStore.gacha)) {
+    configStore.gacha[id] = { ...chest, priceLocks: Math.max(0, amountValue((chest as any).priceLocks)) };
+  }
   gameHistory.clear(); for (const [k,v] of Object.entries(raw?.gameHistory||{})) gameHistory.set(Number(k), v as any[]);
   pendingGacha.clear(); for (const [k,v] of Object.entries(raw?.pendingGacha||{})) pendingGacha.set(Number(k), v as PendingReward[]);
   gachaHistory.clear(); for (const [k,v] of Object.entries(raw?.gachaHistory||{})) gachaHistory.set(Number(k), v as any[]);
@@ -300,10 +313,27 @@ function schedulePersist() {
 
 
 function emptyWallet(): Wallet { return { wl: 0, dl: 0, bgl: 0, ggl: 0, gems: 0 }; }
+function normalizeWallet(w: Partial<Wallet> | undefined): Wallet {
+  const value = (x: unknown) => Number.isFinite(Number(x)) ? Math.max(0, Math.floor(Number(x))) : 0;
+  return { wl:value(w?.wl), dl:value(w?.dl), bgl:value(w?.bgl), ggl:value(w?.ggl), gems:value(w?.gems) };
+}
 function getWallet(userId: number): Wallet {
   let w = wallets.get(userId);
   if (!w) { w = emptyWallet(); wallets.set(userId, w); }
+  else {
+    const normalized = normalizeWallet(w);
+    if (w.wl !== normalized.wl || w.dl !== normalized.dl || w.bgl !== normalized.bgl || w.ggl !== normalized.ggl || w.gems !== normalized.gems) {
+      w = normalized; wallets.set(userId, w);
+    }
+  }
   return w;
+}
+async function persistMutation() {
+  if (!dbReady || !pool) return;
+  const previous = persistInFlight;
+  const job = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(() => persistStateNow());
+  persistInFlight = job;
+  await job;
 }
 function getTradingPortfolio(userId:number){
   let p=tradingPortfolios.get(userId);
@@ -613,13 +643,26 @@ app.post("/api/games/play", async (request, reply) => {
   const gameId = normalize(body?.game_id);
   const cfg = configStore.games[gameId];
   if (!cfg || !cfg.enabled) return reply.code(400).send({ success: false, message: "Game is disabled." });
+  const cfgStake = Math.max(1, Number((body as any)?.stake || cfg.stakes?.[0] || 1));
+  const maxStake = Math.max(1, Number(cfg.maxStake || configStore.site.gameMaxStake || 5000));
+  const stake = Math.min(maxStake, Math.floor(cfgStake));
+  if (!Number.isFinite(stake) || stake <= 0) return reply.code(400).send({ success:false, message:"Invalid stake." });
+  if (Array.isArray(cfg.stakes) && cfg.stakes.length && !cfg.stakes.includes(stake)) return reply.code(400).send({ success:false, message:"Invalid stake amount." });
+
+  const wallet = getWallet(s.user.user_id);
+  if (wallet.wl < stake) return reply.code(400).send({ success:false, message:`Not enough WL balance. Need ${stake} WL.`, wallet });
+  wallet.wl -= stake;
+
   const roundId = crypto.randomUUID();
   const out = gameOutcome(gameId);
-  gameRounds.delete(roundId);
+  const payout = Math.max(0, Math.floor(stake * Math.max(0, Number(out.multiplier || 0)) * Math.max(0, Number(cfg.payoutScale || 1))));
+  wallet.wl += payout;
+
   const history = gameHistory.get(s.user.user_id) ?? [];
   history.unshift({ id: roundId, gameId, outcome: out.outcome, at: Date.now() });
   gameHistory.set(s.user.user_id, history.slice(0, 50));
-  return { success: true, round_id: roundId, game_id: gameId, outcome: out.outcome, balance: getWallet(s.user.user_id) };
+  await persistMutation();
+  return { success: true, round_id: roundId, game_id: gameId, outcome: out.outcome, stake, payout, multiplier: out.multiplier, balance: wallet };
 });
 
 app.get("/api/player/game-history", async (request, reply) => {
@@ -666,6 +709,7 @@ app.post("/api/trading/order", async (request, reply) => {
   }
   const item={id:crypto.randomUUID(),symbol,side:side as "BUY"|"SELL",amount,priceLocks:asset.priceLocks,grossBalance:gross,feeBalance:fee,netBalance:side==="BUY"?-(gross+fee):(gross-fee),at:Date.now()};
   const h=tradingHistory.get(s.user.user_id)||[]; h.unshift(item); tradingHistory.set(s.user.user_id,h.slice(0,100));
+  await persistMutation();
   return {success:true,order:item,wallet:w,holdings:p};
 });
 app.get("/api/player/trading-history", async (request, reply) => {
@@ -687,8 +731,10 @@ app.post("/api/gacha/spin", async (request, reply) => {
   const chest = configStore.gacha[chestId];
   if (!chest || !chest.enabled) return reply.code(404).send({ success:false, message:"Gacha chest unavailable." });
   if (!Array.isArray(chest.rewards) || chest.rewards.length === 0) return reply.code(400).send({ success:false, message:"This chest has no rewards." });
-  const cost = 0;
+  const cost = Math.max(0, Math.floor(Number(chest.priceLocks || 0) * count));
   const wallet = getWallet(s.user.user_id);
+  if (wallet.wl < cost) return reply.code(400).send({ success:false, message:`Not enough WL balance. Need ${cost} WL.`, wallet });
+  wallet.wl -= cost;
   const rewards: PendingReward[] = [];
   for (let i=0;i<count;i++) {
     const r = weightedGachaReward(chest);
@@ -699,6 +745,7 @@ app.post("/api/gacha/spin", async (request, reply) => {
   const history = gachaHistory.get(s.user.user_id) ?? [];
   history.unshift({id:crypto.randomUUID(),chestId:chest.id,chestTitle:chest.title,entryBalance:cost,rewards,at:Date.now()});
   gachaHistory.set(s.user.user_id, history.slice(0,50));
+  await persistMutation();
   return { success:true, chest:{id:chest.id,title:chest.title}, count, cost, rewards, wallet };
 });
 
@@ -759,6 +806,7 @@ app.post("/api/lua/deposit", async (request: FastifyRequest<{ Body: any }>, repl
   const wallet = getWallet(userId); wallet[currency as keyof Wallet] += amount;
   const result = { success: true, action: "deposit", currency, amount, wallet };
   processedTransactions.set(tx, { at: Date.now(), result });
+  await persistMutation();
   return result;
 });
 
@@ -773,6 +821,7 @@ app.post("/api/lua/withdraw", async (request: FastifyRequest<{ Body: any }>, rep
   wallet[key] -= amount;
   const result = { success: true, action: "withdraw", currency, amount, wallet };
   processedTransactions.set(tx, { at: Date.now(), result });
+  await persistMutation();
   return result;
 });
 
@@ -782,6 +831,7 @@ app.post("/api/lua/withdraw-rollback", async (request: FastifyRequest<{ Body: an
   const tx = normalize(body?.transaction_id); const userId = amountValue(body?.user_id); const currency = String(body?.currency ?? "").toLowerCase(); const amount = amountValue(body?.amount);
   if (!tx || userId <= 0 || !Object.hasOwn(currencyMap, currency) || amount <= 0) return reply.code(400).send({ success: false, message: "Invalid rollback payload." });
   const wallet = getWallet(userId); wallet[currency as keyof Wallet] += amount;
+  await persistMutation();
   return { success: true, action: "withdraw_rollback", currency, amount, wallet };
 });
 
@@ -850,7 +900,7 @@ app.post("/api/admin/gacha/chests", async (request: FastifyRequest<{ Body: any }
   if (!id) return reply.code(400).send({success:false,message:"Invalid chest id."});
   if (configStore.gacha[id]) return reply.code(409).send({success:false,message:"Chest already exists."});
   const rewards = Array.isArray(body.rewards) ? body.rewards.map((r:any,i:number)=>({id:normalize(r.id)||`${id}-${i+1}`,name:normalize(r.name)||`Reward ${i+1}`,item_id:amountValue(r.item_id),amount:amountValue(r.amount),rarity:normalize(r.rarity)||"COMMON",chance:Number(r.chance)||0,image:normalize(r.image)})).filter((r:any)=>r.item_id>0&&r.amount>0&&r.chance>0).slice(0,20) : [];
-  configStore.gacha[id]={id,enabled:body.enabled!==false,title:normalize(body.title)||id.toUpperCase(),description:normalize(body.description)||"TREE PS Gacha Chest",badge:normalize(body.badge)||"NEW",icon:normalize(body.icon),rewards};
+  configStore.gacha[id]={id,enabled:body.enabled!==false,title:normalize(body.title)||id.toUpperCase(),description:normalize(body.description)||"TREE PS Gacha Chest",badge:normalize(body.badge)||"NEW",icon:normalize(body.icon),priceLocks:Math.max(0,amountValue(body.priceLocks)),rewards};
   savePersistedConfig();
   return {success:true,gacha:configStore.gacha[id]};
 });
@@ -861,7 +911,7 @@ app.put("/api/admin/gacha/:id", async (request:FastifyRequest<{Params:{id:string
   if (!current) return reply.code(404).send({success:false,message:"Unknown gacha chest."});
   const body=parseJsonBody(request.body);
   const rewards=Array.isArray(body.rewards)?body.rewards.map((r:any,i:number)=>({id:normalize(r.id)||`${id}-${i+1}`,name:normalize(r.name)||`Reward ${i+1}`,item_id:amountValue(r.item_id),amount:amountValue(r.amount),rarity:normalize(r.rarity)||"COMMON",chance:Number(r.chance)||0,image:normalize(r.image)})).filter((r:any)=>r.item_id>0&&r.amount>0&&r.chance>0).slice(0,20):current.rewards;
-  configStore.gacha[id]={...current,...body,id,rewards};
+  configStore.gacha[id]={...current,...body,id,priceLocks:Math.max(0,amountValue(body.priceLocks ?? current.priceLocks)),rewards};
   savePersistedConfig();
   return {success:true,gacha:configStore.gacha[id]};
 });

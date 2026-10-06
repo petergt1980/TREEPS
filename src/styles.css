@@ -216,3 +216,10 @@ button{cursor:pointer}
 .admin-admin-actions{display:flex;align-items:center;gap:7px;flex-shrink:0}
 .admin-account-role{color:#bdb9ff!important;border:1px solid #3b377a;border-radius:5px;padding:3px 5px;background:#15132e}
 @media(max-width:650px){.admin-quick-btn{display:none}.admin-add-admin-row{grid-template-columns:1fr}.admin-admin-row{align-items:flex-start;flex-direction:column}.admin-admin-actions{width:100%;justify-content:flex-start}}
+
+/* TREE PS V42 - unified wallet controls */
+.game-stakes{display:flex;gap:8px;flex-wrap:wrap;padding:10px 0 14px}
+.game-stakes button{border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.035);color:inherit;border-radius:10px;padding:8px 12px;font-weight:700;cursor:pointer;transition:.18s}
+.game-stakes button:hover:not(:disabled){transform:translateY(-1px);border-color:var(--primary)}
+.game-stakes button.active{background:var(--primary);border-color:var(--primary);color:#fff;box-shadow:0 8px 24px rgba(95,91,246,.22)}
+.game-stakes button:disabled{opacity:.5;cursor:not-allowed}
