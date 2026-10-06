@@ -260,9 +260,24 @@ async function ensureDatabase() {
     state JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS treeps_wallets (
+    user_id BIGINT PRIMARY KEY,
+    wl BIGINT NOT NULL DEFAULT 0,
+    dl BIGINT NOT NULL DEFAULT 0,
+    bgl BIGINT NOT NULL DEFAULT 0,
+    ggl BIGINT NOT NULL DEFAULT 0,
+    gems BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS treeps_gacha_pending (
+    user_id BIGINT PRIMARY KEY,
+    rewards JSONB NOT NULL DEFAULT '[]'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
   const result = await pool.query<{state:any}>("SELECT state FROM treeps_state WHERE id=1");
   if (result.rowCount && result.rows[0]?.state) {
     hydrateState(result.rows[0].state);
+    await migrateLedgerTables();
     dbReady = true;
     console.log("TREE PS: loaded persistent state from Neon PostgreSQL.");
     return;
@@ -289,8 +304,26 @@ async function ensureDatabase() {
   nextWebAccountId = Math.max(nextWebAccountId, ...[...webAccounts.values()].map(a => a.id + 1), 100001);
   assets.clear(); for (const [k,v] of Object.entries(configStore.assets)) assets.set(k,String(v||""));
   dbReady = true;
+  await migrateLedgerTables();
   await persistStateNow();
   console.log("TREE PS: initialized persistent state in Neon PostgreSQL.");
+}
+
+async function migrateLedgerTables() {
+  if (!pool) return;
+  const walletCount=await pool.query<{count:string}>(`SELECT COUNT(*)::text AS count FROM treeps_wallets`);
+  if (Number(walletCount.rows[0]?.count||0)===0) {
+    for (const [userId, wallet] of wallets) {
+      const w = normalizeWallet(wallet);
+      await pool.query(`INSERT INTO treeps_wallets (user_id,wl,dl,bgl,ggl,gems) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id) DO NOTHING`, [userId,w.wl,w.dl,w.bgl,w.ggl,w.gems]);
+    }
+  }
+  const pendingCount=await pool.query<{count:string}>(`SELECT COUNT(*)::text AS count FROM treeps_gacha_pending`);
+  if (Number(pendingCount.rows[0]?.count||0)===0) {
+    for (const [userId, rewards] of pendingGacha) {
+      await pool.query(`INSERT INTO treeps_gacha_pending (user_id,rewards) VALUES ($1,$2::jsonb) ON CONFLICT (user_id) DO NOTHING`, [userId,JSON.stringify(rewards)]);
+    }
+  }
 }
 
 function saveWebAccounts(){ schedulePersist(); }
@@ -328,6 +361,36 @@ function getWallet(userId: number): Wallet {
   }
   return w;
 }
+
+async function dbWallet(userId:number): Promise<Wallet> {
+  if (!pool) return getWallet(userId);
+  const r = await pool.query(`SELECT wl,dl,bgl,ggl,gems FROM treeps_wallets WHERE user_id=$1`, [userId]);
+  if (!r.rowCount) {
+    const empty=emptyWallet();
+    await pool.query(`INSERT INTO treeps_wallets (user_id,wl,dl,bgl,ggl,gems) VALUES ($1,0,0,0,0,0) ON CONFLICT (user_id) DO NOTHING`, [userId]);
+    wallets.set(userId, empty);
+    return empty;
+  }
+  const w=normalizeWallet(r.rows[0] as any);
+  wallets.set(userId,w);
+  return w;
+}
+
+async function setDbWallet(userId:number,wallet:Wallet): Promise<Wallet> {
+  const w=normalizeWallet(wallet);
+  wallets.set(userId,w);
+  if (pool) await pool.query(`INSERT INTO treeps_wallets (user_id,wl,dl,bgl,ggl,gems) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id) DO UPDATE SET wl=EXCLUDED.wl,dl=EXCLUDED.dl,bgl=EXCLUDED.bgl,ggl=EXCLUDED.ggl,gems=EXCLUDED.gems,updated_at=NOW()`, [userId,w.wl,w.dl,w.bgl,w.ggl,w.gems]);
+  return w;
+}
+
+async function atomicWalletChange(userId:number, currency:keyof Wallet, delta:number): Promise<Wallet|null> {
+  if (!pool) { const w=getWallet(userId); const next=(w[currency]||0)+delta; if(next<0) return null; w[currency]=next; return w; }
+  const column=currency;
+  const r=await pool.query(`INSERT INTO treeps_wallets (user_id,${column}) VALUES ($1,$2) ON CONFLICT (user_id) DO UPDATE SET ${column}=treeps_wallets.${column}+$2,updated_at=NOW() WHERE treeps_wallets.${column}+$2>=0 RETURNING wl,dl,bgl,ggl,gems`, [userId,delta]);
+  if(!r.rowCount) return null;
+  const w=normalizeWallet(r.rows[0] as any); wallets.set(userId,w); return w;
+}
+
 async function persistMutation() {
   if (!dbReady || !pool) return;
   const previous = persistInFlight;
@@ -470,6 +533,12 @@ function requireAdmin(request: FastifyRequest): Session | null {
   return s && isAdminUser(s.user) ? s : null;
 }
 
+async function refreshStateFromDb() {
+  if (!pool || !dbReady) return;
+  const r=await pool.query<{state:any}>("SELECT state FROM treeps_state WHERE id=1");
+  if (r.rowCount && r.rows[0]?.state) hydrateState(r.rows[0].state);
+}
+
 function syncAccountAdminFlag(account: WebAccount) {
   for (const [token, session] of sessions) {
     if (session.user.web_account_id === account.id) {
@@ -527,7 +596,7 @@ app.post("/api/auth/register/", async (request, reply) => {
   return {success:true,session:token,user,is_admin:isAdminUser(user),requiresGrowIDLink:true};
 });
 
-app.get("/api/auth/version", async () => ({success:true,version:"TREE-AUTH-V10",register:true,login:true,link:true}));
+app.get("/api/auth/version", async () => ({success:true,version:"TREE-AUTH-V11",register:true,login:true,link:true}));
 
 app.post("/api/auth/login", async (request, reply) => {
   const body = parseJsonBody(request.body);
@@ -542,6 +611,7 @@ app.post("/api/auth/login", async (request, reply) => {
 });
 
 app.get("/api/auth/admin-status", async (request, reply) => {
+  await refreshStateFromDb();
   const s = authSession(request);
   if (!s) return reply.code(401).send({ authenticated:false, is_admin:false });
   const email = normalizeEmail(s.user.email);
@@ -612,6 +682,7 @@ app.get("/api/auth/link-status", async (request: FastifyRequest<{ Querystring: {
 });
 
 app.get("/api/auth/session", async (request, reply) => {
+  await refreshStateFromDb();
   const s = authSession(request);
   if (!s) return reply.code(401).send({ authenticated: false });
   return { authenticated: true, user: { ...s.user, is_admin: isAdminUser(s.user) }, is_admin: isAdminUser(s.user), expiresAt: s.expiresAt };
@@ -624,12 +695,12 @@ app.get("/api/player/profile", async (request, reply) => {
 });
 app.get("/api/player/wallet", async (request, reply) => {
   const s = authSession(request); if (!s) return reply.code(401).send({ message: "Unauthorized" });
-  return { success: true, user_id: s.user.user_id, wallet: getWallet(s.user.user_id) };
+  return { success: true, user_id: s.user.user_id, wallet: await dbWallet(s.user.user_id) };
 });
 app.get("/api/player/game-wallet", async (request, reply) => {
   const s = authSession(request); if (!s) return reply.code(401).send({ message: "Unauthorized" });
   // Backward-compatible endpoint exposing the normal wallet balance.
-  return { success: true, balance: getWallet(s.user.user_id) };
+  return { success: true, balance: await dbWallet(s.user.user_id) };
 });
 
 app.post("/api/game/bonus", async (request, reply) => {
@@ -649,14 +720,16 @@ app.post("/api/games/play", async (request, reply) => {
   if (!Number.isFinite(stake) || stake <= 0) return reply.code(400).send({ success:false, message:"Invalid stake." });
   if (Array.isArray(cfg.stakes) && cfg.stakes.length && !cfg.stakes.includes(stake)) return reply.code(400).send({ success:false, message:"Invalid stake amount." });
 
-  const wallet = getWallet(s.user.user_id);
-  if (wallet.wl < stake) return reply.code(400).send({ success:false, message:`Not enough WL balance. Need ${stake} WL.`, wallet });
-  wallet.wl -= stake;
+  const currentWallet = await dbWallet(s.user.user_id);
+  if (currentWallet.wl < stake) return reply.code(400).send({ success:false, message:`Not enough WL balance. Need ${stake} WL.`, wallet:currentWallet });
+  const debited = await atomicWalletChange(s.user.user_id, "wl", -stake);
+  if (!debited) return reply.code(409).send({ success:false, message:"Wallet changed. Refresh and try again.", wallet:await dbWallet(s.user.user_id) });
 
   const roundId = crypto.randomUUID();
   const out = gameOutcome(gameId);
   const payout = Math.max(0, Math.floor(stake * Math.max(0, Number(out.multiplier || 0)) * Math.max(0, Number(cfg.payoutScale || 1))));
-  wallet.wl += payout;
+  const wallet = payout > 0 ? await atomicWalletChange(s.user.user_id, "wl", payout) : debited;
+  if (!wallet) return reply.code(500).send({ success:false, message:"Wallet payout update failed. The stake was not lost; contact an admin." });
 
   const history = gameHistory.get(s.user.user_id) ?? [];
   history.unshift({ id: roundId, gameId, outcome: out.outcome, at: Date.now() });
@@ -698,14 +771,16 @@ app.post("/api/trading/order", async (request, reply) => {
   const gross=Math.max(1,Math.round(amount*asset.priceLocks));
   if(gross < configStore.trading.minLocks || gross > configStore.trading.maxLocks) return reply.code(400).send({success:false,message:"Order size is outside the configured balance limits."});
   const fee=Math.floor(gross*Math.max(0,Number(configStore.trading.feeBps||0))/10000);
-  const w=getWallet(s.user.user_id); const p=getTradingPortfolio(s.user.user_id);
+  const w=await dbWallet(s.user.user_id); const p=getTradingPortfolio(s.user.user_id);
   p[symbol]=Number(p[symbol]||0);
   if(side==="BUY"){
     const total=gross+fee; if(w.wl<total) return reply.code(400).send({success:false,message:`Not enough WL balance. Need ${total}.`,wallet:w});
-    w.wl-=total; p[symbol]=Math.round((p[symbol]+amount)*1_000_000)/1_000_000;
+    const next=await atomicWalletChange(s.user.user_id,"wl",-total); if(!next) return reply.code(409).send({success:false,message:"Wallet changed. Refresh and try again.",wallet:await dbWallet(s.user.user_id)});
+    w.wl=next.wl; p[symbol]=Math.round((p[symbol]+amount)*1_000_000)/1_000_000;
   }else{
     if(p[symbol] < amount) return reply.code(400).send({success:false,message:`Insufficient ${symbol} holdings.`});
-    p[symbol]=Math.round((p[symbol]-amount)*1_000_000)/1_000_000; w.wl+=Math.max(0,gross-fee);
+    const next=await atomicWalletChange(s.user.user_id,"wl",Math.max(0,gross-fee)); if(!next) return reply.code(500).send({success:false,message:"Wallet update failed."});
+    w.wl=next.wl; p[symbol]=Math.round((p[symbol]-amount)*1_000_000)/1_000_000;
   }
   const item={id:crypto.randomUUID(),symbol,side:side as "BUY"|"SELL",amount,priceLocks:asset.priceLocks,grossBalance:gross,feeBalance:fee,netBalance:side==="BUY"?-(gross+fee):(gross-fee),at:Date.now()};
   const h=tradingHistory.get(s.user.user_id)||[]; h.unshift(item); tradingHistory.set(s.user.user_id,h.slice(0,100));
@@ -732,16 +807,31 @@ app.post("/api/gacha/spin", async (request, reply) => {
   if (!chest || !chest.enabled) return reply.code(404).send({ success:false, message:"Gacha chest unavailable." });
   if (!Array.isArray(chest.rewards) || chest.rewards.length === 0) return reply.code(400).send({ success:false, message:"This chest has no rewards." });
   const cost = Math.max(0, Math.floor(Number(chest.priceLocks || 0) * count));
-  const wallet = getWallet(s.user.user_id);
-  if (wallet.wl < cost) return reply.code(400).send({ success:false, message:`Not enough WL balance. Need ${cost} WL.`, wallet });
-  wallet.wl -= cost;
+  const currentWallet = await dbWallet(s.user.user_id);
+  if (currentWallet.wl < cost) return reply.code(400).send({ success:false, message:`Not enough WL balance. Need ${cost} WL.`, wallet:currentWallet });
+  const wallet = cost > 0 ? await atomicWalletChange(s.user.user_id,"wl",-cost) : currentWallet;
+  if (!wallet) return reply.code(409).send({ success:false, message:"Wallet changed. Refresh and try again.", wallet:await dbWallet(s.user.user_id) });
   const rewards: PendingReward[] = [];
   for (let i=0;i<count;i++) {
     const r = weightedGachaReward(chest);
     rewards.push({item_id:r.item_id, amount:r.amount, name:r.name, image:r.image || undefined, rarity:r.rarity});
   }
-  const existing = pendingGacha.get(s.user.user_id) ?? [];
-  pendingGacha.set(s.user.user_id, [...existing, ...rewards]);
+  let mergedPending:PendingReward[];
+  if (pool) {
+    const client=await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const row=await client.query(`SELECT rewards FROM treeps_gacha_pending WHERE user_id=$1 FOR UPDATE`,[s.user.user_id]);
+      const existing=Array.isArray(row.rows[0]?.rewards)?row.rows[0].rewards as PendingReward[]:[];
+      mergedPending=[...existing,...rewards];
+      await client.query(`INSERT INTO treeps_gacha_pending (user_id,rewards) VALUES ($1,$2::jsonb) ON CONFLICT (user_id) DO UPDATE SET rewards=EXCLUDED.rewards,updated_at=NOW()`,[s.user.user_id,JSON.stringify(mergedPending)]);
+      await client.query("COMMIT");
+    } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  } else {
+    const existing = pendingGacha.get(s.user.user_id) ?? [];
+    mergedPending=[...existing,...rewards];
+  }
+  pendingGacha.set(s.user.user_id, mergedPending);
   const history = gachaHistory.get(s.user.user_id) ?? [];
   history.unshift({id:crypto.randomUUID(),chestId:chest.id,chestTitle:chest.title,entryBalance:cost,rewards,at:Date.now()});
   gachaHistory.set(s.user.user_id, history.slice(0,50));
@@ -757,6 +847,7 @@ app.get("/api/player/gacha-history", async (request, reply) => {
 
 app.get("/api/gacha/pending", async (request, reply) => {
   const s = authSession(request); if (!s) return reply.code(401).send({ message: "Unauthorized" });
+  if (pool) { const r=await pool.query(`SELECT rewards FROM treeps_gacha_pending WHERE user_id=$1`,[s.user.user_id]); const rewards=Array.isArray(r.rows[0]?.rewards)?r.rows[0].rewards:[]; pendingGacha.set(s.user.user_id,rewards); return {success:true,rewards}; }
   return { success: true, rewards: pendingGacha.get(s.user.user_id) ?? [] };
 });
 
@@ -780,6 +871,18 @@ app.post("/api/lua/gacha-claim", async (request: FastifyRequest<{ Body: any }>, 
   if (!validLuaSecret(request, body)) return reply.code(401).send({ success: false, message: "Unauthorized request." });
   const userId = amountValue(body?.user_id);
   if (userId <= 0) return reply.code(400).send({ success: false, message: "Invalid user ID." });
+  if (pool) {
+    const client=await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const row=await client.query(`SELECT rewards FROM treeps_gacha_pending WHERE user_id=$1 FOR UPDATE`,[userId]);
+      const rewards=Array.isArray(row.rows[0]?.rewards)?row.rows[0].rewards:[];
+      if (rewards.length) await client.query(`DELETE FROM treeps_gacha_pending WHERE user_id=$1`,[userId]);
+      await client.query("COMMIT");
+      pendingGacha.set(userId,rewards as PendingReward[]);
+      return reply.type("application/json").send({ success:true, rewards });
+    } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
   const rewards = pendingGacha.get(userId) ?? [];
   if (!rewards.length) return { success: true, rewards: [] };
   pendingGacha.set(userId, []);
@@ -791,8 +894,10 @@ app.post("/api/lua/gacha-restore", async (request: FastifyRequest<{ Body: any }>
   const userId = amountValue(body?.user_id); const rewards = Array.isArray(body?.rewards) ? body.rewards : [];
   if (userId <= 0) return reply.code(400).send({ success: false, message: "Invalid user ID." });
   const existing = pendingGacha.get(userId) ?? [];
-  pendingGacha.set(userId, [...rewards, ...existing]);
-  return { success: true, rewards: pendingGacha.get(userId) };
+  const merged=[...rewards,...existing];
+  pendingGacha.set(userId, merged);
+  if (pool) await pool.query(`INSERT INTO treeps_gacha_pending (user_id,rewards) VALUES ($1,$2::jsonb) ON CONFLICT (user_id) DO UPDATE SET rewards=EXCLUDED.rewards,updated_at=NOW()`,[userId,JSON.stringify(merged)]);
+  return { success: true, rewards: merged };
 });
 
 const currencyMap = { wl: "wl", dl: "dl", bgl: "bgl", ggl: "ggl" } as const;
@@ -803,7 +908,8 @@ app.post("/api/lua/deposit", async (request: FastifyRequest<{ Body: any }>, repl
   const tx = normalize(body?.transaction_id); const userId = amountValue(body?.user_id); const currency = String(body?.currency ?? "").toLowerCase(); const amount = amountValue(body?.amount);
   if (!tx || userId <= 0 || !Object.hasOwn(currencyMap, currency) || amount <= 0) return reply.code(400).send({ success: false, message: "Invalid deposit payload." });
   const processed = processedTransactions.get(tx); if (processed) return processed.result;
-  const wallet = getWallet(userId); wallet[currency as keyof Wallet] += amount;
+  const wallet = await atomicWalletChange(userId, currency as keyof Wallet, amount);
+  if (!wallet) return reply.code(500).send({ success:false, message:"Wallet update failed." });
   const result = { success: true, action: "deposit", currency, amount, wallet };
   processedTransactions.set(tx, { at: Date.now(), result });
   await persistMutation();
@@ -816,9 +922,10 @@ app.post("/api/lua/withdraw", async (request: FastifyRequest<{ Body: any }>, rep
   const tx = normalize(body?.transaction_id); const userId = amountValue(body?.user_id); const currency = String(body?.currency ?? "").toLowerCase(); const amount = amountValue(body?.amount);
   if (!tx || userId <= 0 || !Object.hasOwn(currencyMap, currency) || amount <= 0) return reply.code(400).send({ success: false, message: "Invalid withdrawal payload." });
   const processed = processedTransactions.get(tx); if (processed) return processed.result;
-  const wallet = getWallet(userId); const key = currency as keyof Wallet;
-  if (wallet[key] < amount) return reply.code(400).send({ success: false, message: "Insufficient web balance." });
-  wallet[key] -= amount;
+  const before = await dbWallet(userId); const key = currency as keyof Wallet;
+  if (before[key] < amount) return reply.code(400).send({ success: false, message: "Insufficient web balance.", wallet:before });
+  const wallet = await atomicWalletChange(userId, key, -amount);
+  if (!wallet) return reply.code(409).send({ success:false, message:"Wallet changed. Refresh and try again.", wallet:await dbWallet(userId) });
   const result = { success: true, action: "withdraw", currency, amount, wallet };
   processedTransactions.set(tx, { at: Date.now(), result });
   await persistMutation();
@@ -830,7 +937,8 @@ app.post("/api/lua/withdraw-rollback", async (request: FastifyRequest<{ Body: an
   if (!validLuaSecret(request, body)) return reply.code(401).send({ success: false, message: "Unauthorized request." });
   const tx = normalize(body?.transaction_id); const userId = amountValue(body?.user_id); const currency = String(body?.currency ?? "").toLowerCase(); const amount = amountValue(body?.amount);
   if (!tx || userId <= 0 || !Object.hasOwn(currencyMap, currency) || amount <= 0) return reply.code(400).send({ success: false, message: "Invalid rollback payload." });
-  const wallet = getWallet(userId); wallet[currency as keyof Wallet] += amount;
+  const wallet = await atomicWalletChange(userId, currency as keyof Wallet, amount);
+  if (!wallet) return reply.code(500).send({ success:false, message:"Wallet rollback failed." });
   await persistMutation();
   return { success: true, action: "withdraw_rollback", currency, amount, wallet };
 });
@@ -873,6 +981,7 @@ app.delete("/api/admin/admins/:id", async (request: FastifyRequest<{ Params: { i
 });
 
 app.get("/api/admin/state", async (request, reply) => {
+  await refreshStateFromDb();
   const s = requireAdmin(request);
   if (!s) return reply.code(403).send({ success:false, message:"Admin access required." });
   return { success:true, is_admin:true, user:s.user, site:configStore.site, games:Object.values(configStore.games), assets:Object.fromEntries(assets), gacha:Object.values(configStore.gacha), trading:configStore.trading, markets:MARKET_CONFIGS, accounts:publicAccounts(), admins:publicAccounts().filter(a=>a.is_admin) };

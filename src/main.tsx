@@ -9,8 +9,8 @@ import {
 import "./styles.css";
 
 const API_ORIGIN = import.meta.env.DEV ? "http://localhost:3000" : "";
-console.info("[TREE-PS V42] API ORIGIN:", API_ORIGIN || "same-origin /api");
-(window as any).__TREE_PS_BUILD__ = "V41";
+console.info("[TREE-PS V43] API ORIGIN:", API_ORIGIN || "same-origin /api");
+(window as any).__TREE_PS_BUILD__ = "V43-WALLET-LEDGER";
 
 type User = { user_id?: number; growid?: string; clean_name?: string; server?: string; is_admin?: boolean; email?: string; web_account_id?: number };
 type Session = { token: string; user: User };
@@ -242,8 +242,9 @@ function Dashboard({ session, onLogout }: {session:Session; onLogout:()=>void}) 
   const [assets,setAssets]=useState<AssetConfig>({});
   const [siteConfig,setSiteConfig]=useState<SiteConfig|null>(null);
   const [wallet,setWallet]=useState<WalletBalance>({wl:0,dl:0,bgl:0,ggl:0,gems:0});
+  const [admin,setAdmin]=useState<boolean>(session.user.is_admin===true);
   const displayName=session.user.clean_name||session.user.growid||"PLAYER";
-  const admin=session.user.is_admin===true;
+  useEffect(()=>{let dead=false; (async()=>{try{const r=await api("/api/auth/session",{headers:{Authorization:`Bearer ${session.token}`}}); if(!dead) setAdmin(r.is_admin===true || r.user?.is_admin===true);}catch{}})(); return()=>{dead=true}},[session.token]);
   const baseNav: Array<[string, React.ReactNode]> = [["Dashboard",<LayoutDashboard/>],["Game Hub",<Gamepad2/>],["Balance Trading",<BarChart3/>],["Gacha Vault",<Gift/>],["Wallet",<Wallet/>],["Inventory",<Boxes/>],["Global Chat",<MessageCircle/>],["History",<Activity/>],["Profile",<UserRound/>],["Settings",<Settings/>]];
   const nav: Array<[string, React.ReactNode]> = admin ? [...baseNav,["Admin Panel",<ShieldCheck/>]] : baseNav;
   const visibleGames=useMemo(()=>{const configured=gameConfigs.length?gameConfigs:games.map(g=>({...g,icon:undefined} as any)); const merged=games.map(base=>{const c=configured.find((x:any)=>x.id===base.id); return c?{...base,title:c.title,description:c.description,badge:c.badge,enabled:c.enabled}:base}).filter((g:any)=>g.enabled!==false); const q=search.toLowerCase().trim();return q?merged.filter((g:any)=>(g.title+g.description).toLowerCase().includes(q)):merged},[search,gameConfigs]);
@@ -398,7 +399,9 @@ function GachaPage({session,wallet,onAction,onWalletChange}:{session:Session;wal
     setRolling(true); setReveal([]);
     try{
       const r=await api('/api/gacha/spin',{method:'POST',headers:{...auth.headers,'Content-Type':'application/json'},body:JSON.stringify({chest_id:chest.id,count})});
-      setBalance(wallet.wl);
+      const nextWallet=r.wallet || wallet;
+      setBalance(Number(nextWallet.wl||0));
+      onWalletChange(nextWallet);
       await new Promise(res=>setTimeout(res,650));
       setReveal(r.rewards||[]); setPending(p=>[...p,...(r.rewards||[])]); setHistory(h=>[{chestTitle:chest.title,entryBalance:r.cost,rewards:r.rewards,at:Date.now()},...h]);
       onAction(`${count}x ${chest.title} opened`);
